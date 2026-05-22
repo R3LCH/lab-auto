@@ -1,0 +1,62 @@
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+*.egg-info/
+.eggs/
+dist/
+build/
+*.whl
+
+# Playwright (browsers + test artifacts)
+.playwright/
+playwright-report/
+test-results/
+
+# GUAP workspace data (never commit a real workspace into the repo)
+session/
+labs/
+state/
+logs/
+
+# Auth / session material (if copied into the project tree)
+**/storage_state.json
+**/session.key
+cookies.json
+**/cookies.json
+*.cookies.json
+
+# Captured GUAP HTML — personal data / tokens (local capture only)
+tests/fixtures/task_list.html
+tests/fixtures/task_detail.html
+
+# Temp files from atomic writes / Playwright save
+*.tmp
+.*.tmp
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editors (optional local settings)
+.idea/
+.vscode/
+!.vscode/extensions.json
+
+# Internal planning docs (optional — remove this line to version them)
+docs/superpowers/
+.omx/

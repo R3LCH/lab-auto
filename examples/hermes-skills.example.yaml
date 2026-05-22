@@ -1,0 +1,10 @@
+# Merge into ~/.hermes/config.yaml (skills section)
+
+skills:
+  external_dirs:
+    # Scan this repo's skills/ without copying (read-only)
+    - /path/to/lab_automation/skills
+
+# Optional: set default workspace for lab-auto subprocesses
+# Also add to ~/.hermes/.env:
+#   LAB_AUTO_ROOT=/path/to/your/guap-workspace

@@ -1,0 +1,20 @@
+{
+  "agents": {
+    "defaults": {
+      "skills": ["guap-lab-workflow"]
+    }
+  },
+  "skills": {
+    "entries": {
+      "guap-lab-workflow": {
+        "enabled": true,
+        "env": {
+          "LAB_AUTO_ROOT": "/path/to/your/guap-workspace"
+        }
+      }
+    },
+    "load": {
+      "extraDirs": []
+    }
+  }
+}

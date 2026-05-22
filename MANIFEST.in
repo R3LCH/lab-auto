@@ -1,0 +1,9 @@
+include README.md
+include LICENSE
+include AGENTS.md
+include MANIFEST.in
+graft skills
+graft .agents
+graft docs
+graft examples
+graft scripts
