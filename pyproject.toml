@@ -46,10 +46,10 @@ dev = [
 lab-auto = "lab_auto.cli:app"
 
 [project.urls]
-Homepage = "https://github.com/your-org/lab_automation"
-Repository = "https://github.com/your-org/lab_automation"
-Issues = "https://github.com/your-org/lab_automation/issues"
-Documentation = "https://github.com/your-org/lab_automation#readme"
+Homepage = "https://github.com/R3LCH/lab_auto"
+Repository = "https://github.com/R3LCH/lab_auto"
+Issues = "https://github.com/R3LCH/lab_auto/issues"
+Documentation = "https://github.com/R3LCH/lab_auto#readme"
 
 [tool.setuptools.packages.find]
 where = ["src"]
