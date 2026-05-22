@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "guap-lab-auto"
-version = "0.1.1"
+version = "0.1.2"
 description = "CLI to sync GUAP student lab tasks, manage local folders, and submit PDF reports."
 readme = "README.md"
 license = "MIT"
