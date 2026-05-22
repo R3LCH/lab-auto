@@ -9,7 +9,7 @@ from lab_auto.browser import BASE_URL, BrowserService, BrowserSession
 from lab_auto.logging import LogKind, append_log
 from lab_auto.models import LocalStatus, WorkRecord
 from lab_auto.parsers import parse_task_detail
-from lab_auto.paths import extract_task_site_id, sync_work_folder
+from lab_auto.paths import canonical_task_detail_url, extract_task_site_id, sync_work_folder
 from lab_auto.state import (
     generate_markdown_views,
     load_state_unlocked,
@@ -98,7 +98,7 @@ class SubmitService:
                 work_ref,
             )
             work_id = work.work_id
-            task_url = work.task_url
+            task_url = canonical_task_detail_url(work.task_url, BASE_URL)
             task_site_id = work.task_site_id or extract_task_site_id(work.task_url) or None
 
         now = datetime.now().astimezone().isoformat(timespec="seconds")

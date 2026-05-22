@@ -25,7 +25,7 @@ Use this skill when the user works on **GUAP** (`pro.guap.ru`) student lab tasks
 pip install guap-lab-auto
 playwright install chromium
 lab-auto workspace set /path/to/workspace
-lab-auto auth login    # human completes browser login
+lab-auto auth login    # human enters credentials; CLI opens task list after SSO
 ```
 
 Optional: LibreOffice (`soffice`) or Microsoft Word (Windows) for `lab-auto convert`.
@@ -81,6 +81,7 @@ One-shot workspace: `lab-auto --root /path/to/workspace sync`
 | `[SENT]` | Submitted, awaiting teacher |
 | `[SENTFAILED]` | Upload failed — suggest `sync` |
 | `[DONE]` | Accepted |
+| `[UNDONE]` | No website status yet (`—` on GUAP) |
 | `[UNKNOWN]` | Unrecognized website status |
 
 `[REVIEW]`, `[SENT]`, and `[SENTFAILED]` stay sticky until the website shows `ожидает проверки` or `принят`.

@@ -22,9 +22,18 @@ from lab_auto.state import StateFileError, active_works, archived_works, load_st
 from lab_auto.submit import SubmitService
 from lab_auto.sync import SyncService
 
-app = typer.Typer(no_args_is_help=True)
-auth_app = typer.Typer(no_args_is_help=True)
-workspace_app = typer.Typer(no_args_is_help=True)
+app = typer.Typer(
+    no_args_is_help=True,
+    help="Sync GUAP lab tasks, manage local folders, convert DOCX to PDF, and submit reports.",
+)
+auth_app = typer.Typer(
+    no_args_is_help=True,
+    help="Sign in to pro.guap.ru and manage the encrypted local browser session.",
+)
+workspace_app = typer.Typer(
+    no_args_is_help=True,
+    help="Choose where labs, state, and session files are stored on disk.",
+)
 app.add_typer(auth_app, name="auth")
 app.add_typer(workspace_app, name="workspace")
 
@@ -40,6 +49,7 @@ def main(
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show full tracebacks."),
 ) -> None:
+    """GUAP lab workflow CLI (see subcommands)."""
     del ctx
     set_context(root, verbose=verbose)
 
@@ -67,6 +77,7 @@ def _fail(message: str, exc: Exception) -> None:
 
 @workspace_app.command("show")
 def workspace_show() -> None:
+    """Print the active workspace path and saved default from config."""
     effective = _root()
     typer.echo(f"Active workspace: {effective}")
     try:
@@ -84,7 +95,10 @@ def workspace_show() -> None:
 
 
 @workspace_app.command("set")
-def workspace_set(path: Path) -> None:
+def workspace_set(
+    path: Path = typer.Argument(help="Directory for labs/, state/, session/, and logs/."),
+) -> None:
+    """Save a workspace directory as the default (used when --root is omitted)."""
     resolved = path.expanduser().resolve()
     resolved.mkdir(parents=True, exist_ok=True)
     saved = set_saved_workspace(resolved)
@@ -94,13 +108,17 @@ def workspace_set(path: Path) -> None:
 
 @workspace_app.command("unset")
 def workspace_unset() -> None:
+    """Clear the saved default workspace (fall back to current directory)."""
     clear_saved_workspace()
     set_context(None, verbose=get_context().verbose)
     typer.echo(f"Default workspace cleared. Active workspace is now {_root()}")
 
 
 @auth_app.command("import-cookie")
-def import_cookie(path: Path) -> None:
+def import_cookie(
+    path: Path = typer.Argument(help="JSON file: Playwright storage state or cookie list."),
+) -> None:
+    """Import browser cookies and validate access to the GUAP task list."""
     try:
         browser = BrowserService(_root())
         target = browser.import_cookie_file(path)
@@ -118,6 +136,7 @@ def import_cookie(path: Path) -> None:
 
 @auth_app.command("logout")
 def logout() -> None:
+    """Delete the local encrypted session file from the workspace."""
     deleted = BrowserService(_root()).logout()
     typer.echo("Local session deleted" if deleted else "No local session to delete")
 
@@ -143,6 +162,7 @@ def migrate_session() -> None:
 
 @auth_app.command("check")
 def check() -> None:
+    """Verify the saved session can open the GUAP student task list (headless)."""
     try:
         browser = BrowserService(_root())
         ok, migrated = browser.validate_session()
@@ -159,6 +179,7 @@ def check() -> None:
 
 @auth_app.command("login")
 def login() -> None:
+    """Sign in via GUAP SSO in a visible browser and save an encrypted session."""
     username = typer.prompt("Username")
     password = typer.prompt("Password", hide_input=True)
     try:
@@ -176,6 +197,7 @@ def sync(
         help="Keep tasks removed from the website as archived instead of deleting them from state.",
     ),
 ) -> None:
+    """Pull tasks from pro.guap.ru, update folders and works.yaml, download assignment PDFs."""
     try:
         result = SyncService(_root()).sync(archive_removed=archive)
         active = active_works(result.records)
@@ -208,6 +230,7 @@ def status(
         help="Include archived works.",
     ),
 ) -> None:
+    """List synced works with local status tags, grouped by subject."""
     works = load_state(_root())
     if all_works:
         visible = works
@@ -228,7 +251,10 @@ def status(
 
 
 @app.command("archive")
-def archive(work_ref: str) -> None:
+def archive(
+    work_ref: str = typer.Argument(help="Work ID (task-178541) or a unique name fragment."),
+) -> None:
+    """Mark a work as archived and hide it from default status listing."""
     try:
         work = archive_work(_root(), work_ref)
         typer.echo(f"{work.work_id} archived")
@@ -237,7 +263,10 @@ def archive(work_ref: str) -> None:
 
 
 @app.command("unarchive")
-def unarchive(work_ref: str) -> None:
+def unarchive(
+    work_ref: str = typer.Argument(help="Work ID (task-178541) or a unique name fragment."),
+) -> None:
+    """Restore an archived work to the active task list."""
     try:
         work = unarchive_work(_root(), work_ref)
         typer.echo(f"{work.work_id} unarchived")
@@ -246,7 +275,10 @@ def unarchive(work_ref: str) -> None:
 
 
 @app.command("review")
-def review(work_ref: str) -> None:
+def review(
+    work_ref: str = typer.Argument(help="Work ID (task-178541) or a unique name fragment."),
+) -> None:
+    """Mark a work as [REVIEW] after you finished the report locally (ready for your check)."""
     try:
         work = mark_work_review(_root(), work_ref)
         typer.echo(f"{work.work_id} marked {work.local_status.prefix}")
@@ -256,10 +288,11 @@ def review(work_ref: str) -> None:
 
 @app.command("convert")
 def convert(
-    work_ref: str,
-    docx: Path = typer.Option(..., "--docx"),
-    output: Optional[Path] = typer.Option(None, "--output", help="PDF output path."),
+    work_ref: str = typer.Argument(help="Work ID (task-178541) or a unique name fragment."),
+    docx: Path = typer.Option(..., "--docx", help="Source DOCX file to convert."),
+    output: Optional[Path] = typer.Option(None, "--output", help="PDF output path (default: beside DOCX)."),
 ) -> None:
+    """Convert a DOCX report to PDF (Word or LibreOffice, depending on platform)."""
     try:
         docx_path, pdf_path = resolve_convert_paths(_root(), work_ref, docx, output)
         pdf = convert_docx_to_pdf(docx_path, pdf_path)
@@ -269,7 +302,11 @@ def convert(
 
 
 @app.command("submit")
-def submit(work_ref: str, file: Path = typer.Option(..., "--file")) -> None:
+def submit(
+    work_ref: str = typer.Argument(help="Work ID (task-178541) or a unique name fragment."),
+    file: Path = typer.Option(..., "--file", help="PDF file to upload to GUAP."),
+) -> None:
+    """Upload a PDF report to the task page and set local status to [SENT] or [SENTFAILED]."""
     try:
         work = SubmitService(_root()).submit(work_ref, file)
         typer.echo(f"{work.work_id} marked {work.local_status.prefix}")

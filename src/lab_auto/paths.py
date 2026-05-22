@@ -2,16 +2,20 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 from lab_auto.models import LocalStatus
 
-_TASK_URL_SEGMENT_RE = re.compile(r"^/inside/student/tasks/([^/]+)$")
+_TASK_URL_SEGMENT_RE = re.compile(
+    r"^/inside/student/tasks/([^/]+)(?:/download)?/?$",
+    re.IGNORECASE,
+)
 
 _INVALID_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _STATUS_PREFIX = re.compile(
     r"^\[(?:" + "|".join(re.escape(status.value) for status in LocalStatus) + r")\]\s*"
 )
+_LEGACY_STATUS_PREFIXES = ("[UNKNOWN]",)
 _WHITESPACE = re.compile(r"\s+")
 _SLUG_SEPARATOR = re.compile(r"[^a-z0-9]+")
 _MAX_NAME_LENGTH = 100
@@ -54,12 +58,43 @@ def _translit_map() -> dict[int, str]:
 _RU_TRANSLIT = str.maketrans(_translit_map())
 
 
+def _folder_has_status_prefix(folder_name: str) -> bool:
+    if _STATUS_PREFIX.match(folder_name):
+        return True
+    return any(folder_name.startswith(f"{legacy} ") for legacy in _LEGACY_STATUS_PREFIXES)
+
+
+def extract_report_site_id(report_url: str) -> str:
+    path = urlparse(report_url).path.rstrip("/")
+    match = re.match(r"^/inside/student/reports/([^/]+)/download$", path, re.IGNORECASE)
+    if not match:
+        return ""
+    return match.group(1)
+
+
 def extract_task_site_id(task_url: str) -> str:
     path = urlparse(task_url).path.rstrip("/")
     match = _TASK_URL_SEGMENT_RE.match(path)
     if not match:
         return ""
     return match.group(1)
+
+
+def is_task_download_url(task_url: str) -> bool:
+    path = urlparse(task_url).path.rstrip("/").lower()
+    return path.endswith("/download")
+
+
+def canonical_task_detail_url(task_url: str, base_url: str) -> str:
+    """Return the task detail page URL (never the PDF download endpoint)."""
+    site_id = extract_task_site_id(task_url)
+    if not site_id:
+        return task_url
+    return urljoin(base_url, f"/inside/student/tasks/{site_id}")
+
+
+def task_pdf_download_url(site_id: str, base_url: str) -> str:
+    return urljoin(base_url, f"/inside/student/tasks/{site_id}/download")
 
 
 def safe_name(value: str) -> str:
@@ -159,7 +194,7 @@ def sync_work_folder(
         if (
             candidate.is_dir()
             and candidate != target
-            and _STATUS_PREFIX.match(candidate.name)
+            and _folder_has_status_prefix(candidate.name)
             and _folder_label_matches(candidate.name, work_name, task_site_id)
         ):
             matches.append(candidate)

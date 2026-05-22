@@ -6,7 +6,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from lab_auto.browser import BrowserService
+from lab_auto.browser import TASKS_LIST_URL, BrowserService
+from lab_auto.paths import canonical_task_detail_url
 from lab_auto.config import resolve_workspace
 
 
@@ -35,17 +36,19 @@ def main() -> None:
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    detail_url = canonical_task_detail_url(args.task_url, "https://pro.guap.ru")
+
     with BrowserService(root).open_session() as session:
         list_page = session.goto_tasks()
         (output_dir / "task_list.html").write_text(list_page.content(), encoding="utf-8")
         list_page.close()
 
         detail_page = session.new_page()
-        detail_page.goto(args.task_url, wait_until="domcontentloaded", timeout=60_000)
+        detail_page.goto(detail_url, wait_until="domcontentloaded", timeout=60_000)
         (output_dir / "task_detail.html").write_text(detail_page.content(), encoding="utf-8")
         detail_page.close()
 
-    print(f"Saved {output_dir / 'task_list.html'}")
+    print(f"Saved {output_dir / 'task_list.html'} (perPage={TASKS_LIST_URL.split('perPage=')[-1]})")
     print(f"Saved {output_dir / 'task_detail.html'}")
     print("These files are gitignored. Do not commit them — they may contain personal data.")
 

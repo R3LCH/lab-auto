@@ -13,6 +13,7 @@ class LocalStatus(str, Enum):
     REVIEW = "REVIEW"
     SENT = "SENT"
     SENTFAILED = "SENTFAILED"
+    UNDONE = "UNDONE"
     UNKNOWN = "UNKNOWN"
 
     @property
@@ -20,10 +21,27 @@ class LocalStatus(str, Enum):
         return f"[{self.value}]"
 
 
+def _coerce_local_status(value: str) -> LocalStatus:
+    return LocalStatus(value)
+
+
+def _normalize_status_text(status_text: str) -> str:
+    collapsed = " ".join(status_text.strip().split())
+    for dash in ("—", "–", "−", "‑"):
+        collapsed = collapsed.replace(dash, "-")
+    return collapsed
+
+
+def website_status_is_dash(status_text: str) -> bool:
+    """True when GUAP shows no status yet (—, -, or empty)."""
+    normalized = _normalize_status_text(status_text)
+    return not normalized or normalized == "-"
+
+
 def status_from_website(status_text: str) -> LocalStatus:
+    if website_status_is_dash(status_text):
+        return LocalStatus.UNDONE
     status = " ".join(status_text.strip().lower().split())
-    if not status:
-        return LocalStatus.UNKNOWN
     if status == "принят":
         return LocalStatus.DONE
     if status == "ожидает проверки":
@@ -38,6 +56,8 @@ def resolve_local_status(
     previous: LocalStatus | None,
 ) -> LocalStatus:
     """Merge website status with workflow-only local statuses."""
+    if website_status_is_dash(website_status):
+        return LocalStatus.UNDONE
     website_mapped = status_from_website(website_status)
     if previous is None:
         return website_mapped
@@ -148,7 +168,7 @@ class WorkRecord:
 
             site_id = extract_task_site_id(task_url)
             values["task_site_id"] = site_id or None
-        values["local_status"] = LocalStatus(values["local_status"])
+        values["local_status"] = _coerce_local_status(str(values["local_status"]))
         folder = Path(values["folder"])
         values["folder"] = folder if folder.is_absolute() or root is None else root / folder
         task_pdf = values.get("task_pdf")

@@ -8,7 +8,7 @@ from urllib.parse import urljoin
 from parsel import Selector
 
 from lab_auto.models import status_from_website
-from lab_auto.paths import extract_task_site_id
+from lab_auto.paths import canonical_task_detail_url, extract_task_site_id, is_task_download_url
 _KNOWN_WEBSITE_STATUSES = frozenset({"принят", "ожидает проверки", "не принят"})
 
 
@@ -26,6 +26,7 @@ class ParsedTask:
 @dataclass(slots=True)
 class ParsedTaskDetail:
     pdf_url: str | None
+    report_download_urls: list[str]
     has_upload_form: bool
     awaiting_review: bool
 
@@ -34,11 +35,26 @@ def clean_text(value: str | None) -> str:
     return " ".join((value or "").split())
 
 
+def _list_row_status_text(status_cell: Selector) -> str:
+    """Read the GUAP status column (badge label or plain <span>—</span>)."""
+    badge_parts = status_cell.css("span.badge ::text").getall()
+    if badge_parts:
+        return clean_text(" ".join(badge_parts))
+    span_text = status_cell.css("span::text").get()
+    if span_text is not None:
+        return clean_text(span_text)
+    return clean_text(status_cell.xpath("string()").get())
+
+
 def normalize_website_status(status_text: str) -> str:
     return " ".join(status_text.strip().lower().split())
 
 
 def is_known_website_status(status_text: str) -> bool:
+    from lab_auto.models import website_status_is_dash
+
+    if website_status_is_dash(status_text):
+        return True
     return normalize_website_status(status_text) in _KNOWN_WEBSITE_STATUSES
 
 
@@ -73,6 +89,32 @@ def _task_list_tables(selector: Selector) -> list[Selector]:
     return selector.css("table")
 
 
+def _task_link_href(name_cell: Selector, row: Selector | None = None) -> str | None:
+    """Pick the task detail link, not the assignment PDF download link."""
+    base = "https://pro.guap.ru"
+
+    def pick(href: str | None) -> str | None:
+        if href and not is_task_download_url(urljoin(base, href)):
+            return href
+        return None
+
+    blue = name_cell.css("a.link-switch-blue::attr(href)").get()
+    chosen = pick(blue)
+    if chosen:
+        return chosen
+    for href in name_cell.css("a[href*='/inside/student/tasks/']::attr(href)").getall():
+        chosen = pick(href)
+        if chosen:
+            return chosen
+    if row is not None:
+        for href in row.css("a[href*='/inside/student/tasks/']::attr(href)").getall():
+            chosen = pick(href)
+            if chosen:
+                return chosen
+    fallback = blue or name_cell.css("a[href*='/inside/student/tasks/']::attr(href)").get()
+    return fallback
+
+
 def _task_url_path(task_url: str) -> str:
     site_id = extract_task_site_id(task_url)
     if not site_id:
@@ -93,18 +135,16 @@ def _iter_list_rows(selector: Selector, base_url: str) -> Iterator[dict[str, str
             if len(cells) <= max(indexes.values()):
                 continue
             name_cell = cells[indexes["Название"]]
-            link = name_cell.css("a.link-switch-blue::attr(href)").get()
-            if not link:
-                link = name_cell.css("a[href*='/inside/student/tasks/']::attr(href)").get()
+            link = _task_link_href(name_cell, row)
             name = clean_text(name_cell.xpath("string()").get())
             if not name or not link:
                 continue
             yield {
                 "subject": clean_text(cells[indexes["Дисциплина"]].xpath("string()").get()),
                 "name": name,
-                "status": clean_text(cells[indexes["Статус"]].xpath("string()").get()),
+                "status": _list_row_status_text(cells[indexes["Статус"]]),
                 "due_date": clean_text(cells[indexes["Предельная дата"]].xpath("string()").get()),
-                "task_url": urljoin(base_url, link),
+                "task_url": canonical_task_detail_url(urljoin(base_url, link), base_url),
             }
 
 
@@ -155,7 +195,7 @@ def parse_task_list(html: str, base_url: str) -> list[ParsedTask]:
     selector = Selector(text=html)
     tasks: list[ParsedTask] = []
     for row in _iter_list_rows(selector, base_url):
-        task_url = row["task_url"]
+        task_url = canonical_task_detail_url(row["task_url"], base_url)
         task = ParsedTask(
             subject=row["subject"],
             name=row["name"],
@@ -194,14 +234,36 @@ def _detail_status_text(selector: Selector) -> str:
     return clean_text(" ".join(selector.css("table span::text").getall()))
 
 
+def _task_assignment_pdf_href(selector: Selector) -> str | None:
+    for href in selector.css("a[href*='/inside/student/tasks/'][href*='/download']::attr(href)").getall():
+        if href and "/inside/student/reports/" not in href:
+            return href
+    return selector.css("a.btn-outline-secondary[href*='/inside/student/tasks/'][href*='/download']::attr(href)").get()
+
+
+def _submitted_report_download_hrefs(selector: Selector) -> list[str]:
+    seen: set[str] = set()
+    hrefs: list[str] = []
+    for href in selector.css(
+        "a[href*='/inside/student/reports/'][href*='/download']::attr(href)"
+    ).getall():
+        if not href or href in seen:
+            continue
+        seen.add(href)
+        hrefs.append(href)
+    return hrefs
+
+
 def parse_task_detail(html: str, base_url: str) -> ParsedTaskDetail:
     selector = Selector(text=html)
-    download_href = selector.css("a.btn-outline-secondary[href*='/download']::attr(href)").get()
-    if not download_href:
-        download_href = selector.css("a[href*='/download']::attr(href)").get()
+    download_href = _task_assignment_pdf_href(selector)
+    report_hrefs = _submitted_report_download_hrefs(selector)
     status_text = _detail_status_text(selector)
     return ParsedTaskDetail(
         pdf_url=urljoin(base_url, download_href) if download_href else None,
+        report_download_urls=[
+            urljoin(base_url, href) for href in report_hrefs
+        ],
         has_upload_form=bool(selector.css("input[type='file']#file").get()),
         awaiting_review="ожидает проверки" in status_text,
     )

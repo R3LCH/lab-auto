@@ -5,6 +5,9 @@ import pytest
 from lab_auto.models import LocalStatus
 from lab_auto.paths import (
     build_work_id,
+    canonical_task_detail_url,
+    extract_report_site_id,
+    extract_task_site_id,
     legacy_work_id,
     safe_name,
     status_folder_name,
@@ -24,6 +27,23 @@ def test_safe_name_guards_windows_reserved_device_names():
 def test_build_work_id_uses_task_site_id():
     url = "https://pro.guap.ru/inside/student/tasks/178540"
     assert build_work_id(url, "Математика", "ЛР №1: Ряды") == "task-178540"
+
+
+def test_extract_task_site_id_accepts_download_urls():
+    url = "https://pro.guap.ru/inside/student/tasks/d1b5d6c43001fe8ce6156986faf81c18/download"
+    assert extract_task_site_id(url) == "d1b5d6c43001fe8ce6156986faf81c18"
+
+
+def test_extract_report_site_id_reads_report_download_path():
+    url = "https://pro.guap.ru/inside/student/reports/5283063/download"
+    assert extract_report_site_id(url) == "5283063"
+
+
+def test_canonical_task_detail_url_strips_download_suffix():
+    download = "https://pro.guap.ru/inside/student/tasks/abc/download"
+    assert canonical_task_detail_url(download, "https://pro.guap.ru") == (
+        "https://pro.guap.ru/inside/student/tasks/abc"
+    )
 
 
 def test_legacy_work_id_matches_truncated_folder_names():

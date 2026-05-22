@@ -1,49 +1,70 @@
 # 🎓 guap-lab-auto
 
-**Unofficial CLI for GUAP students** — sync lab tasks from [pro.guap.ru](https://pro.guap.ru), organize work on disk, convert DOCX → PDF, and submit reports after human review.
+**Unofficial CLI for GUAP students** — sync tasks from [pro.guap.ru](https://pro.guap.ru), mirror them into local folders, track state in YAML, convert DOCX → PDF, and submit reports via Playwright.
 
-> ⚠️ Not affiliated with GUAP. The portal UI can change and break automation. Use at your own risk.
+This repository also ships an **[AgentSkills](https://agentskills.io/) skill** (`guap-lab-workflow`) so coding agents ([OpenClaw](https://documentation.openclaw.ai/), [Hermes](https://hermes-agent.nousresearch.com/), Cursor, etc.) run **`lab-auto` commands** against your workspace instead of scraping GUAP in the browser themselves.
+
+[English](README.md) · [Русский](README.ru.md)
+
+> ⚠️ Not affiliated with GUAP. HTML on the portal can change and break parsers. Use at your own risk.
 
 | | |
 |---|---|
 | 📦 **PyPI** | `guap-lab-auto` |
 | ⌨️ **Command** | `lab-auto` |
+| 🤖 **Agent skill** | `guap-lab-workflow` → `skills/guap-lab-workflow/` |
 | 🐍 **Python** | 3.11+ |
-| 🌐 **Portal** | GUAP student tasks |
+| 🌐 **Portal** | `https://pro.guap.ru/inside/student/tasks/` |
 
 ---
 
 ## ✨ Features
 
-- 🔄 **Sync** tasks into `labs/<subject>/[STATUS] Title [id]/`
-- 📋 **YAML state** + Markdown summaries for humans and agents
-- 🔐 **Encrypted session** (Fernet) — cookies never stored as plain JSON
-- 📤 **Submit PDFs** via Playwright after you mark work `[REVIEW]`
-- 📄 **DOCX → PDF** (LibreOffice, or Microsoft Word on Windows)
-- 🗄️ **Archive** tasks that disappear from the website
-- 🤖 **OpenClaw & Hermes** — AgentSkills skill `guap-lab-workflow` (`/guap-lab-workflow`)
+- 🔄 **Sync** — scrape task list (100 rows/page), update `state/works.yaml`, rename `labs/<subject>/[STATUS] …/` folders
+- 📥 **Downloads** — `task.pdf` (assignment); `reports/site-report-<id>.pdf` on first sync if GUAP already has a submission
+- 🏷️ **Status mapping** — GUAP labels → `[UNDONE]` / `[REFACTOR]` / `[SENT]` / `[DONE]` / `[UNKNOWN]`; local-only `[REVIEW]` / `[SENTFAILED]`
+- 📋 **State files** — `works.yaml`, `summary.md`, `needs_review.md`, append-only logs
+- 🔐 **Session** — Fernet-encrypted Playwright `storage_state`; SSO via `auth login` (headed browser)
+- 📄 **Convert** — DOCX → PDF (LibreOffice / Windows Word)
+- 📤 **Submit** — upload PDF on task detail page after `[REVIEW]`
+- 🗄️ **Archive** — `sync --archive` or `archive` / `unarchive` for tasks gone from the list
+- 🤖 **Bundled agent skill** — [`skills/guap-lab-workflow/`](skills/guap-lab-workflow/SKILL.md) documents commands, workspace layout, and guardrails so agents invoke `lab-auto` correctly
 
 ---
 
-## 🤖 AI agents (OpenClaw & Hermes)
+## 🤖 Agent skill (`guap-lab-workflow`)
 
-This repo ships an [AgentSkills](https://agentskills.io/) skill so agents run **`lab-auto`** instead of scraping GUAP directly.
+The CLI is the only supported integration surface for automation. The skill teaches agents **which `lab-auto` subcommands to run**, where `works.yaml` and lab folders live, and when human login or explicit approval is required (e.g. no unsupervised `submit`).
 
-| Agent | Install skill | Invoke |
-|-------|---------------|--------|
-| [OpenClaw](https://documentation.openclaw.ai/) | `skills/` in workspace or `./scripts/install-agent-skills.sh` | `/guap-lab-workflow` + terminal tools |
-| [Hermes](https://hermes-agent.nousresearch.com/) | same script → `~/.hermes/skills/` | `/guap-lab-workflow` or `hermes -s guap-lab-workflow` |
+| Path | Purpose |
+|------|---------|
+| [`skills/guap-lab-workflow/SKILL.md`](skills/guap-lab-workflow/SKILL.md) | Main skill — workflow, prerequisites, rules |
+| [`skills/guap-lab-workflow/references/`](skills/guap-lab-workflow/references/) | Command cheat sheet, OpenClaw/Hermes notes |
+| [`.agents/skills/guap-lab-workflow/`](.agents/skills/guap-lab-workflow/) | Copy for Cursor / compatible agent loaders |
+| [`AGENTS.md`](AGENTS.md) | Maintainer-oriented agent guide for this repo |
+| [`docs/integrations/`](docs/integrations/) | OpenClaw & Hermes setup |
+
+**Requirements for agents:** `lab-auto` on `PATH`, Chromium (`playwright install chromium`), and a configured workspace. The skill does not replace the CLI — it orchestrates it.
+
+### Install the skill
 
 ```bash
-# Linux / macOS
+# Linux / macOS — copies into OpenClaw workspace and ~/.hermes/skills/
 ./scripts/install-agent-skills.sh
 
 # Windows
 .\scripts\install-agent-skills.ps1
 ```
 
-Config examples: `examples/openclaw.json.example`, `examples/hermes-skills.example.yaml`  
-Full guides: [docs/integrations/](docs/integrations/) · [AGENTS.md](AGENTS.md)
+Or symlink / copy `skills/guap-lab-workflow/` into your agent’s skills directory manually.
+
+| Agent | Invoke after install |
+|-------|----------------------|
+| OpenClaw | `/guap-lab-workflow` (slash command) |
+| Hermes | `/guap-lab-workflow` or `hermes -s guap-lab-workflow` |
+| Cursor | Load via `.agents/skills/` or project rules pointing at the skill |
+
+Example configs: [`examples/openclaw.json.example`](examples/openclaw.json.example), [`examples/hermes-skills.example.yaml`](examples/hermes-skills.example.yaml).
 
 ---
 
@@ -56,17 +77,8 @@ pip install guap-lab-auto
 playwright install chromium
 ```
 
-With [uv](https://docs.astral.sh/uv/):
-
 ```bash
 uv tool install guap-lab-auto
-playwright install chromium
-```
-
-From Git (no PyPI):
-
-```bash
-pip install "guap-lab-auto @ git+https://github.com/your-org/lab_automation.git"
 playwright install chromium
 ```
 
@@ -75,138 +87,151 @@ playwright install chromium
 ```bash
 lab-auto workspace set ~/guap-labs
 lab-auto auth login
+lab-auto auth check
 lab-auto sync
 lab-auto status
 ```
+
+`auth login` uses a visible Chromium window; `sync`, `submit`, and `auth check` run headless.
 
 ---
 
 ## 📁 Workspace
 
-Data lives in your workspace (not inside the package):
+User data stays outside the package:
 
 ```
 workspace/
-├── labs/          # one folder per task
-├── state/         # works.yaml, summary.md
-├── session/       # encrypted browser session
-└── logs/          # action logs
+├── labs/
+│   └── <subject>/
+│       └── [SENT] Lab title [178541]/
+│           ├── task.pdf
+│           └── reports/
+│               └── site-report-5283063.pdf
+├── state/
+│   ├── works.yaml
+│   ├── summary.md
+│   └── needs_review.md
+├── session/
+│   └── storage_state.json    # encrypted
+└── logs/
 ```
 
-**Resolution order:** `--root` / `LAB_AUTO_ROOT` → saved default (`lab-auto workspace set`) → current directory.
+**Root resolution:** `--root` → `LAB_AUTO_ROOT` → `lab-auto workspace set` → current directory.
 
-| Platform | Saved config |
-|----------|----------------|
+| Platform | Config |
+|----------|--------|
 | Windows | `%APPDATA%\lab-auto\config.yaml` |
 | Linux / macOS | `~/.config/lab-auto/config.yaml` |
+
+Session key: `%APPDATA%\lab-auto\session.key` or `~/.config/lab-auto/session.key`.
 
 ---
 
 ## ⌨️ Commands
 
-| Area | Command |
-|------|---------|
-| 🔑 Auth | `lab-auto auth login` · `check` · `migrate-session` · `import-cookie` · `logout` |
-| 📂 Workspace | `lab-auto workspace set\|show\|unset <path>` |
-| 🔄 Sync | `lab-auto sync` · `sync --archive` |
-| 📊 Status | `lab-auto status` · `status --all` |
-| ✅ Workflow | `lab-auto review <id>` · `convert <id> --docx f.docx` · `submit <id> --file f.pdf` |
-| 🗄️ Archive | `lab-auto archive <id>` · `unarchive <id>` |
+Typer help: `lab-auto --help`, `lab-auto auth --help`, `lab-auto <command> --help`.
 
-Use `lab-auto --help` and `lab-auto <command> --help` for details.
+**Globals:** `--root` / `LAB_AUTO_ROOT`, `-v` / `--verbose`.
+
+### 📂 Workspace
+
+| Command | Description |
+|---------|-------------|
+| `workspace set <path>` | Save default workspace directory |
+| `workspace show` | Print active + saved workspace and config path |
+| `workspace unset` | Clear saved default |
+
+### 🔑 Auth
+
+| Command | Description |
+|---------|-------------|
+| `auth login` | SSO in headed browser; save encrypted session |
+| `auth check` | Headless check: can open task list |
+| `auth import-cookie <file>` | Import Playwright storage JSON or cookie list |
+| `auth migrate-session` | Re-wrap legacy plaintext session as encrypted |
+| `auth logout` | Remove `session/storage_state.json` |
+
+### 🔄 Workflow
+
+| Command | Description |
+|---------|-------------|
+| `sync` | Fetch list + details; merge `works.yaml`; download missing PDFs |
+| `sync --archive` | Mark tasks removed from site as `archived: true` instead of dropping |
+| `status` | Print active works grouped by subject |
+| `status --all` | Include archived rows |
+| `review <id>` | Set local status `[REVIEW]` and rename folder |
+| `convert <id> --docx PATH` | DOCX → PDF (`--output` optional) |
+| `submit <id> --file PATH` | Upload PDF; set `[SENT]` or `[SENTFAILED]` |
+| `archive <id>` | `archived: true`, hide from default `status` |
+| `unarchive <id>` | Restore to active list |
+
+`<id>`: `task-178541` or a unique substring of the folder title.
+
+**Typical sequence:** `sync` → edit report in work folder → `review` → `convert` → `submit` → `sync`.
 
 ---
 
 ## 🏷️ Folder statuses
 
-| Prefix | Meaning |
-|--------|---------|
-| `[REFACTOR]` | Not accepted on the website |
-| `[REVIEW]` | Ready for your review (local) |
-| `[SENT]` | Submitted, awaiting teacher |
-| `[SENTFAILED]` | Upload failed (retry or `sync`) |
-| `[DONE]` | Accepted |
-| `[UNKNOWN]` | Unrecognized website status |
+| Prefix | GUAP / local |
+|--------|----------------|
+| `[UNDONE]` | Status column `—` (not submitted) |
+| `[REFACTOR]` | `не принят` |
+| `[SENT]` | `ожидает проверки` |
+| `[DONE]` | `принят` |
+| `[UNKNOWN]` | Any other portal status string |
+| `[REVIEW]` | Local only — you marked ready to check |
+| `[SENTFAILED]` | Local only — last `submit` failed |
 
-**IDs:** CLI / `works.yaml` use `task-178541`; folders look like `[SENT] Lab title [178541]`.
+**IDs:** `work_id` = `task-<site_id>`; folder = `[STATUS] <title> [<site_id>]`.
+
+`sync` renames folders when mapped status changes. Report import runs once per work when `reports/` is empty and site status is `ожидает проверки` or `принят`.
 
 ---
 
-## 🔐 Session security
+## 🔐 Session
 
-- Cookies stored in `session/storage_state.json` (encrypted).
-- Key: `%APPDATA%\lab-auto\session.key` (Windows) or `~/.config/lab-auto/session.key` (Unix).
-- Upgrade legacy files: `lab-auto auth migrate-session`
-- Password is **not** saved (browser login only).
+- Password is prompted once in `auth login` and not written to disk.
+- Cookies: `workspace/session/storage_state.json` (encrypted wrapper).
+- `auth migrate-session` upgrades old plaintext exports.
 
 ---
 
 ## 🧪 Development
 
 ```bash
-git clone https://github.com/your-org/lab_automation.git
-cd lab_automation
+git clone https://github.com/R3LCH/lab_auto.git
+cd lab_auto
 python -m venv .venv
-source .venv/bin/activate   # Windows: .\.venv\Scripts\Activate.ps1
+# Windows: .\.venv\Scripts\Activate.ps1
+# Unix:    source .venv/bin/activate
 pip install -e ".[dev]"
 playwright install chromium
 pytest
 ```
 
-Optional live test (real GUAP session):
+Live tests (network + saved session):
 
 ```bash
 export LAB_AUTO_ROOT=~/guap-labs
 pytest -m live
 ```
 
-### Test fixtures (local only)
+### Fixtures
 
-Tests use **synthetic** HTML in `tests/conftest.py` (safe to commit). To capture real pages locally (gitignored):
+Default: synthetic HTML in `tests/conftest.py`. Optional local capture (gitignored):
 
 ```bash
 python scripts/capture_guap_fixtures.py --task-url "https://pro.guap.ru/inside/student/tasks/<id>"
 ```
 
-Never commit `tests/fixtures/task_list.html` or `task_detail.html`. See `tests/fixtures/README.md`.
+Do not commit `tests/fixtures/task_list.html` or `task_detail.html`. See [tests/fixtures/README.md](tests/fixtures/README.md).
 
-🤖 **AI agents:** see [AGENTS.md](AGENTS.md).
-
----
-
-## 📦 Publishing to PyPI
-
-Maintainers only.
-
-1. Create accounts on [PyPI](https://pypi.org) and [TestPyPI](https://test.pypi.org).
-2. Ensure the name `guap-lab-auto` is still available.
-3. Update `[project.urls]` in `pyproject.toml` with your real GitHub URL.
-4. Build and upload:
-
-```bash
-pip install build twine
-python -m build
-twine upload dist/*
-```
-
-Dry run on TestPyPI:
-
-```bash
-twine upload --repository testpypi dist/*
-pip install --index-url https://test.pypi.org/simple/ guap-lab-auto
-```
-
-With uv:
-
-```bash
-uv build
-uv publish
-```
-
-Bump `version` in `pyproject.toml` for each release.
+🤖 Agent skill source lives under `skills/guap-lab-workflow/` — see [AGENTS.md](AGENTS.md) when changing CLI behavior agents depend on.
 
 ---
 
 ## 📜 License
 
-MIT — see [LICENSE](LICENSE).
+MIT — [LICENSE](LICENSE).

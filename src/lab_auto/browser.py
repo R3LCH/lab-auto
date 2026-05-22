@@ -8,6 +8,7 @@ from typing import Any
 from urllib.parse import urlencode
 
 from lab_auto.files import atomic_write_text, restrict_private_file
+from lab_auto.paths import canonical_task_detail_url, is_task_download_url
 from lab_auto.session_store import rewrap_session_file, unwrap_storage_state, wrap_storage_state
 
 BASE_URL = "https://pro.guap.ru"
@@ -20,9 +21,12 @@ LOGIN_QUERY = {
     "client_id": "prosuai",
 }
 TASKS_URL = f"{BASE_URL}/inside/student/tasks/"
+TASK_LIST_PER_PAGE = 100
+TASKS_LIST_URL = f"{TASKS_URL}?perPage={TASK_LIST_PER_PAGE}"
 SESSION_DIR = "session"
 _PAGE_LOAD_STATE = "domcontentloaded"
 _DEFAULT_TIMEOUT_MS = 60_000
+_LOGIN_TIMEOUT_MS = 120_000
 
 
 def build_login_url() -> str:
@@ -32,6 +36,44 @@ def build_login_url() -> str:
 
 def session_path(root: Path) -> Path:
     return root / SESSION_DIR / "storage_state.json"
+
+
+class TaskPageTriggersDownloadError(RuntimeError):
+    """Raised when opening a task URL starts a file download instead of HTML."""
+
+
+def _ensure_task_list_page_size(page: Any, *, per_page: int = TASK_LIST_PER_PAGE) -> None:
+    """Set the list to show up to per_page tasks (GUAP defaults to 10)."""
+    select = page.locator("#per-page-select-on-list, select[name='perPage']").first
+    if select.count() == 0:
+        return
+    value = str(per_page)
+    try:
+        current = select.input_value()
+    except Exception:
+        current = None
+    if current == value:
+        return
+    with page.expect_navigation(wait_until=_PAGE_LOAD_STATE, timeout=_DEFAULT_TIMEOUT_MS):
+        select.select_option(value)
+
+
+def _ensure_tasks_page(page: Any, *, timeout_ms: int = _DEFAULT_TIMEOUT_MS) -> None:
+    """Navigate to the student task list and confirm the session is authenticated."""
+    on_list = "/inside/student/tasks" in page.url and "perPage=" in page.url
+    if not on_list:
+        page.goto(TASKS_LIST_URL, wait_until=_PAGE_LOAD_STATE, timeout=timeout_ms)
+    if "/inside/student/tasks" not in page.url:
+        raise RuntimeError(
+            "Could not open the GUAP task list. "
+            "Check that your account has access to student tasks."
+        )
+    _ensure_task_list_page_size(page)
+
+
+def _wait_for_portal_after_sso(page: Any) -> None:
+    """Wait until SSO finishes and the browser reaches pro.guap.ru."""
+    page.wait_for_url("**://pro.guap.ru/**", timeout=_LOGIN_TIMEOUT_MS)
 
 
 @dataclass(slots=True)
@@ -56,9 +98,7 @@ class BrowserSession:
 
     def goto_tasks(self) -> Any:
         page = self.new_page()
-        page.goto(TASKS_URL, wait_until=_PAGE_LOAD_STATE, timeout=_DEFAULT_TIMEOUT_MS)
-        if "/inside/student/tasks" not in page.url:
-            raise RuntimeError("Session is not authenticated. Run `lab-auto auth login`.")
+        _ensure_tasks_page(page)
         return page
 
     def task_list_html(self) -> str:
@@ -69,21 +109,38 @@ class BrowserSession:
             page.close()
 
     def page_html(self, url: str) -> str:
+        if "/inside/student/tasks/" in url:
+            url = canonical_task_detail_url(url, BASE_URL)
         page = self.new_page()
         try:
-            page.goto(url, wait_until=_PAGE_LOAD_STATE, timeout=_DEFAULT_TIMEOUT_MS)
+            try:
+                page.goto(url, wait_until=_PAGE_LOAD_STATE, timeout=_DEFAULT_TIMEOUT_MS)
+            except Exception as exc:
+                if "Download is starting" in str(exc):
+                    raise TaskPageTriggersDownloadError(url) from exc
+                raise
             return page.content()
         finally:
             page.close()
 
     def download_file(self, url: str, destination: Path) -> None:
+        """Save a GUAP file endpoint (usually .../tasks/<id>/download) to disk."""
+        destination.parent.mkdir(parents=True, exist_ok=True)
         page = self.new_page()
         try:
             with page.expect_download(timeout=_DEFAULT_TIMEOUT_MS) as download_info:
-                page.goto(url, wait_until=_PAGE_LOAD_STATE, timeout=_DEFAULT_TIMEOUT_MS)
-            download = download_info.value
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            download.save_as(str(destination))
+                # Do not wait for domcontentloaded — download URLs never load as HTML pages.
+                page.goto(url, timeout=_DEFAULT_TIMEOUT_MS)
+            download_info.value.save_as(str(destination))
+        except Exception as exc:
+            if "Download is starting" not in str(exc):
+                raise
+            response = page.context.request.get(url, timeout=_DEFAULT_TIMEOUT_MS)
+            if not response.ok:
+                raise RuntimeError(
+                    f"Download failed ({response.status}): {url}"
+                ) from exc
+            destination.write_bytes(response.body())
         finally:
             page.close()
 
@@ -179,7 +236,8 @@ class BrowserService:
             page.fill("input[name='username']", username)
             page.fill("input[name='password']", password)
             page.keyboard.press("Enter")
-            page.wait_for_url("**/inside/student/tasks/**", timeout=_DEFAULT_TIMEOUT_MS)
+            _wait_for_portal_after_sso(page)
+            _ensure_tasks_page(page, timeout_ms=_LOGIN_TIMEOUT_MS)
             self.save_storage(context)
         finally:
             context.close()

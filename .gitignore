@@ -20,6 +20,7 @@ htmlcov/
 dist/
 build/
 *.whl
+.pytest_tmp/
 
 # Playwright (browsers + test artifacts)
 .playwright/

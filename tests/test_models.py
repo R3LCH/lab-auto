@@ -9,8 +9,25 @@ def test_maps_known_website_statuses_to_local_prefixes():
     assert status_from_website("ожидает проверки") == LocalStatus.SENT
 
 
+def test_dash_website_status_maps_to_undone_tag():
+    assert status_from_website("—") == LocalStatus.UNDONE
+    assert status_from_website("-") == LocalStatus.UNDONE
+    assert status_from_website("   ") == LocalStatus.UNDONE
+
+
 def test_unknown_website_status_maps_to_unknown_tag():
     assert status_from_website("возвращено на исправление") == LocalStatus.UNKNOWN
+
+
+def test_resolve_local_status_uses_undone_when_website_shows_dash():
+    assert resolve_local_status("—", LocalStatus.REFACTOR) == LocalStatus.UNDONE
+    assert resolve_local_status("—", LocalStatus.SENT) == LocalStatus.UNDONE
+
+
+def test_coerce_local_status_accepts_unknown_value():
+    from lab_auto.models import _coerce_local_status
+
+    assert _coerce_local_status("UNKNOWN") == LocalStatus.UNKNOWN
 
 
 def test_resolve_local_status_preserves_review_until_website_advances():

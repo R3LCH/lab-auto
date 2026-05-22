@@ -14,6 +14,6 @@ After `lab-auto auth login`, refresh local-only fixtures:
 python scripts/capture_guap_fixtures.py --task-url "https://pro.guap.ru/inside/student/tasks/<id>"
 ```
 
-Writes `task_list.html` and `task_detail.html` here. These files are listed in `.gitignore` and are never pushed.
+Writes `task_list.html` and `task_detail.html` here. The capture script opens the list with **perPage=100** so all tasks on one page are included. These files are listed in `.gitignore` and are never pushed.
 
 When present, tests prefer local files over synthetic HTML.

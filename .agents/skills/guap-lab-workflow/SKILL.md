@@ -81,6 +81,7 @@ One-shot workspace: `lab-auto --root /path/to/workspace sync`
 | `[SENT]` | Submitted, awaiting teacher |
 | `[SENTFAILED]` | Upload failed — suggest `sync` |
 | `[DONE]` | Accepted |
+| `[UNDONE]` | No website status yet (`—` on GUAP) |
 | `[UNKNOWN]` | Unrecognized website status |
 
 `[REVIEW]`, `[SENT]`, and `[SENTFAILED]` stay sticky until the website shows `ожидает проверки` or `принят`.

@@ -3,6 +3,7 @@ from pathlib import Path
 from lab_auto.models import LocalStatus, WorkRecord
 from lab_auto.paths import build_work_id, sync_work_folder
 from lab_auto.state import load_state, save_state
+from lab_auto.browser import TaskPageTriggersDownloadError
 from lab_auto.sync import SyncService
 from conftest import first_fixture_task, fixture_task_with_status, load_fixture_task_list
 
@@ -26,6 +27,8 @@ class FakeBrowserSession:
 
     def page_html(self, url: str) -> str:
         self.browser.detail_fetches += 1
+        if "/download" in url:
+            raise TaskPageTriggersDownloadError(url)
         from conftest import load_fixture_task_detail
 
         return load_fixture_task_detail()
@@ -424,6 +427,56 @@ def test_sync_done_moves_to_sent_when_list_shows_awaiting_review(tmp_path):
     assert synced.folder.name == "[SENT] Done Lab [done-resubmit]"
     assert synced.folder.exists()
     assert not folder.exists()
+
+
+def test_sync_downloads_pdf_when_detail_page_triggers_download(tmp_path, monkeypatch):
+    html = load_fixture_task_list()
+    expected = first_fixture_task()
+    browser = FakeBrowser(html)
+    service = SyncService(tmp_path, browser=browser, base_url="https://pro.guap.ru")
+
+    def failing_page_html(_self, url: str) -> str:
+        raise TaskPageTriggersDownloadError(url)
+
+    monkeypatch.setattr(FakeBrowserSession, "page_html", failing_page_html)
+
+    records = service.sync().records
+    synced = next(
+        record
+        for record in records
+        if record.work_id == build_work_id(expected.task_url, expected.subject, expected.name)
+    )
+
+    assert synced.task_pdf.exists()
+    assert browser.downloads[0][0].endswith(f"/inside/student/tasks/{expected.task_site_id}/download")
+
+
+def test_sync_imports_submitted_reports_once(tmp_path, monkeypatch):
+    html = load_fixture_task_list()
+    expected = fixture_task_with_status("принят")
+    browser = FakeBrowser(html)
+    service = SyncService(tmp_path, browser=browser, base_url="https://pro.guap.ru")
+
+    def page_html_with_reports(_self, url: str) -> str:
+        from conftest import load_fixture_task_detail
+
+        return load_fixture_task_detail()
+
+    monkeypatch.setattr(FakeBrowserSession, "page_html", page_html_with_reports)
+
+    records = service.sync().records
+    work_id = build_work_id(expected.task_url, expected.subject, expected.name)
+    synced = next(record for record in records if record.work_id == work_id)
+
+    assert synced.reports
+    assert synced.reports[0].name.startswith("site-report-")
+    assert (synced.folder / "reports" / synced.reports[0].name).exists()
+
+    download_count = len(browser.downloads)
+    records_again = service.sync().records
+    synced_again = next(record for record in records_again if record.work_id == work_id)
+    assert len(synced_again.reports) == len(synced.reports)
+    assert len(browser.downloads) == download_count
 
 
 def test_sync_creates_state_folder_and_downloads_pdf(tmp_path):
