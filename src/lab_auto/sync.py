@@ -256,7 +256,7 @@ class SyncService:
         if reports or self._site_reports_dir_has_files(folder):
             return False
         mapped = status_from_website(website_status)
-        return mapped in {LocalStatus.SENT, LocalStatus.DONE}
+        return mapped in {LocalStatus.REFACTOR, LocalStatus.SENT, LocalStatus.DONE}
 
     @staticmethod
     def _site_reports_dir_has_files(folder: Path) -> bool:

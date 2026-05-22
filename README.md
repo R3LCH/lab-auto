@@ -21,7 +21,7 @@ This repository also ships an **[AgentSkills](https://agentskills.io/) skill** (
 ## ✨ Features
 
 - 🔄 **Sync** — scrape task list (100 rows/page), update `state/works.yaml`, rename `labs/<subject>/[STATUS] …/` folders
-- 📥 **Downloads** — `task.pdf` (assignment); `reports/site-report-<id>.pdf` on first sync if GUAP already has a submission
+- 📥 **Downloads** — `task.pdf` (assignment); `reports/site-report-<id>.pdf` on first sync when GUAP has a submission (`не принят` / `ожидает проверки` / `принят`)
 - 🏷️ **Status mapping** — GUAP labels → `[UNDONE]` / `[REFACTOR]` / `[SENT]` / `[DONE]` / `[UNKNOWN]`; local-only `[REVIEW]` / `[SENTFAILED]`
 - 📋 **State files** — `works.yaml`, `summary.md`, `needs_review.md`, append-only logs
 - 🔐 **Session** — Fernet-encrypted Playwright `storage_state`; SSO via `auth login` (headed browser)
@@ -186,7 +186,7 @@ Typer help: `lab-auto --help`, `lab-auto auth --help`, `lab-auto <command> --hel
 
 **IDs:** `work_id` = `task-<site_id>`; folder = `[STATUS] <title> [<site_id>]`.
 
-`sync` renames folders when mapped status changes. Report import runs once per work when `reports/` is empty and site status is `ожидает проверки` or `принят`.
+`sync` renames folders when mapped status changes. Report import runs once per work when `reports/` is empty and site status is `не принят`, `ожидает проверки`, or `принят`.
 
 ---
 

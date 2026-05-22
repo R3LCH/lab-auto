@@ -219,6 +219,9 @@ def test_sync_skips_detail_page_when_pdf_and_status_unchanged(tmp_path):
         tmp_path, subject, name, LocalStatus.DONE, task_site_id="only"
     )
     folder.joinpath("task.pdf").write_bytes(b"%PDF-1.4\n")
+    reports_dir = folder / "reports"
+    reports_dir.mkdir()
+    reports_dir.joinpath("site-report-1.pdf").write_bytes(b"%PDF-1.4\n")
     save_state(
         tmp_path,
         [
@@ -449,6 +452,43 @@ def test_sync_downloads_pdf_when_detail_page_triggers_download(tmp_path, monkeyp
 
     assert synced.task_pdf.exists()
     assert browser.downloads[0][0].endswith(f"/inside/student/tasks/{expected.task_site_id}/download")
+
+
+def test_sync_imports_reports_for_refactor_on_first_sync(tmp_path, monkeypatch):
+    html = """
+    <table class="table table-bordered">
+      <thead>
+        <tr>
+          <th title="Дисциплина">Дисциплина</th>
+          <th title="Название">Название</th>
+          <th title="Статус">Статус</th>
+          <th title="Предельная дата">Предельная дата</th>
+        </tr>
+      </thead>
+      <tbody><tr>
+        <td>Math</td>
+        <td><a class="link-switch-blue" href="/inside/student/tasks/9001">Refactor Lab</a></td>
+        <td>не принят</td>
+        <td>2099-01-01</td>
+      </tr></tbody>
+    </table>
+    """
+    browser = FakeBrowser(html)
+    service = SyncService(tmp_path, browser=browser, base_url="https://pro.guap.ru")
+
+    def page_html_with_reports(_self, url: str) -> str:
+        from conftest import load_fixture_task_detail
+
+        return load_fixture_task_detail()
+
+    monkeypatch.setattr(FakeBrowserSession, "page_html", page_html_with_reports)
+
+    records = service.sync().records
+    synced = records[0]
+
+    assert synced.local_status == LocalStatus.REFACTOR
+    assert synced.reports
+    assert synced.reports[0].name.startswith("site-report-")
 
 
 def test_sync_imports_submitted_reports_once(tmp_path, monkeypatch):
