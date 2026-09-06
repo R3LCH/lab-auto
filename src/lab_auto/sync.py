@@ -165,6 +165,7 @@ class SyncService:
                     task_site_id=task.task_site_id,
                     due_date=task.due_date,
                     description=detail.description,
+                    additional_material_url=detail.additional_material_url,
                     website_status=task.website_status,
                     local_status=local_status,
                     folder=folder,

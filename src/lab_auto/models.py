@@ -102,6 +102,7 @@ _WORK_RECORD_FIELDS = frozenset({
     "task_site_id",
     "due_date",
     "description",
+    "additional_material_url",
     "website_status",
     "local_status",
     "folder",
@@ -135,6 +136,7 @@ class WorkRecord:
     archived_at: str | None = None
     task_site_id: str | None = None
     description: str | None = None
+    additional_material_url: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -146,6 +148,7 @@ class WorkRecord:
             "task_site_id": self.task_site_id,
             "due_date": self.due_date,
             "description": self.description,
+            "additional_material_url": self.additional_material_url,
             "website_status": self.website_status,
             "local_status": self.local_status.value,
             "folder": str(self.folder),
@@ -254,6 +257,7 @@ def merge_synced_work(synced: WorkRecord, on_disk: WorkRecord | None) -> WorkRec
         task_site_id=task_site_id,
         due_date=synced.due_date,
         description=synced.description,
+        additional_material_url=synced.additional_material_url,
         website_status=synced.website_status,
         local_status=local_status,
         folder=synced.folder,

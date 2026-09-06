@@ -30,6 +30,7 @@ class ParsedTaskDetail:
     has_upload_form: bool
     awaiting_review: bool
     description: str | None = None
+    additional_material_url: str | None = None
 
 
 def clean_text(value: str | None) -> str:
@@ -242,6 +243,17 @@ def _task_assignment_pdf_href(selector: Selector) -> str | None:
     return selector.css("a.btn-outline-secondary[href*='/inside/student/tasks/'][href*='/download']::attr(href)").get()
 
 
+def _additional_material_href(selector: Selector) -> str | None:
+    # GUAP places the external/open link beside the existing PDF download button.
+    for row in selector.css(".list-group-item"):
+        label = clean_text(" ".join(row.css(".task-view-links-text ::text").getall()))
+        if label.rstrip(": ") == "Доп. материалы":
+            href = row.css("a.task-view-links::attr(href)").get()
+            if href and href.strip():
+                return href.strip()
+    return None
+
+
 def _submitted_report_download_hrefs(selector: Selector) -> list[str]:
     seen: set[str] = set()
     hrefs: list[str] = []
@@ -303,6 +315,7 @@ def parse_task_detail(html: str, base_url: str, *, task_url: str | None = None) 
     download_href = _task_assignment_pdf_href(selector)
     report_hrefs = _submitted_report_download_hrefs(selector)
     status_text = _detail_status_text(selector)
+    material_href = _additional_material_href(selector)
     return ParsedTaskDetail(
         pdf_url=urljoin(base_url, download_href) if download_href else None,
         report_download_urls=[
@@ -311,6 +324,7 @@ def parse_task_detail(html: str, base_url: str, *, task_url: str | None = None) 
         has_upload_form=bool(selector.css("input[type='file']#file").get()),
         awaiting_review="ожидает проверки" in status_text,
         description=_task_description(selector, task_url or base_url),
+        additional_material_url=urljoin(task_url or base_url, material_href) if material_href else None,
     )
 
 
