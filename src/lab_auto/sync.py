@@ -26,6 +26,7 @@ from lab_auto.paths import (
 from lab_auto.state import (
     active_works,
     generate_markdown_views,
+    generate_task_markdown,
     load_state_unlocked,
     locked_workspace,
     lookup_previous_work,
@@ -133,19 +134,19 @@ class SyncService:
                     task.website_status,
                 )
 
-                if need_task_pdf or need_site_reports:
-                    detail = self._load_task_detail(session, task_url, task.task_site_id)
-                    if need_task_pdf and detail.pdf_url and not task_pdf.exists():
-                        session.download_file(detail.pdf_url, task_pdf)
-                    if need_site_reports and detail.report_download_urls:
-                        reports = self._import_site_reports(
-                            session,
-                            folder,
-                            detail.report_download_urls,
-                            reports,
-                            work_id=work_id,
-                            now=now,
-                        )
+                # Descriptions can change independently of PDFs and list metadata.
+                detail = self._load_task_detail(session, task_url, task.task_site_id)
+                if need_task_pdf and detail.pdf_url and not task_pdf.exists():
+                    session.download_file(detail.pdf_url, task_pdf)
+                if need_site_reports and detail.report_download_urls:
+                    reports = self._import_site_reports(
+                        session,
+                        folder,
+                        detail.report_download_urls,
+                        reports,
+                        work_id=work_id,
+                        now=now,
+                    )
 
                 if previous and previous.website_status != task.website_status:
                     append_log(
@@ -163,6 +164,7 @@ class SyncService:
                     task_url=task_url,
                     task_site_id=task.task_site_id,
                     due_date=task.due_date,
+                    description=detail.description,
                     website_status=task.website_status,
                     local_status=local_status,
                     folder=folder,
@@ -209,6 +211,9 @@ class SyncService:
                 dropped_ids=dropped_ids,
             )
             save_state_unlocked(self.root, records)
+            for work in active_works(records):
+                if work.work_id in synced_ids:
+                    generate_task_markdown(work)
 
         generate_markdown_views(self.root, records)
         active_count = len(active_works(records))
@@ -234,7 +239,7 @@ class SyncService:
     ) -> ParsedTaskDetail:
         try:
             html = session.page_html(task_url)
-            return parse_task_detail(html, self.base_url)
+            return parse_task_detail(html, self.base_url, task_url=task_url)
         except TaskPageTriggersDownloadError:
             if not task_site_id:
                 raise RuntimeError(

@@ -10,7 +10,7 @@ runner = CliRunner()
 def test_status_without_state_prints_empty_message(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
-    result = runner.invoke(app, ["status"])
+    result = runner.invoke(app, ["--root", str(tmp_path), "status"])
 
     assert result.exit_code == 0
     assert "No works synced yet" in result.output
@@ -71,7 +71,7 @@ def test_auth_migrate_session_reports_already_encrypted(tmp_path, monkeypatch):
 def test_auth_logout_without_session_is_success(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
-    result = runner.invoke(app, ["auth", "logout"])
+    result = runner.invoke(app, ["--root", str(tmp_path), "auth", "logout"])
 
     assert result.exit_code == 0
     assert "No local session" in result.output

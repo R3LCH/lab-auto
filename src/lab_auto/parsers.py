@@ -29,6 +29,7 @@ class ParsedTaskDetail:
     report_download_urls: list[str]
     has_upload_form: bool
     awaiting_review: bool
+    description: str | None = None
 
 
 def clean_text(value: str | None) -> str:
@@ -254,7 +255,50 @@ def _submitted_report_download_hrefs(selector: Selector) -> list[str]:
     return hrefs
 
 
-def parse_task_detail(html: str, base_url: str) -> ParsedTaskDetail:
+def _description_markdown(node: Selector, base_url: str) -> str:
+    """Render the description subtree using the existing HTML parser."""
+    if isinstance(node.root, str):
+        text = re.sub(r"\s+", " ", node.get())
+        return re.sub(r"([\\`*_[\]<>])", r"\\\1", text)
+    tag = node.root.tag
+    if not isinstance(tag, str) or tag in {"script", "style"}:
+        return ""
+    if tag == "br":
+        return "\\\n"
+    if tag in {"ul", "ol"}:
+        items = []
+        for index, item in enumerate(node.xpath("./li"), start=1):
+            prefix = f"{index}. " if tag == "ol" else "- "
+            content = _description_markdown(item, base_url).strip()
+            lines = content.splitlines()
+            if lines:
+                items.append(prefix + lines[0] + "".join(
+                    "\n" + " " * len(prefix) + line for line in lines[1:]
+                ))
+        return "\n\n" + "\n".join(items) + "\n\n"
+    content = "".join(_description_markdown(child, base_url) for child in node.xpath("node()"))
+    if tag == "a" and node.attrib.get("href"):
+        url = urljoin(base_url, node.attrib["href"])
+        for char, escaped in ((" ", "%20"), ("(", "%28"), (")", "%29"), ("<", "%3C"), (">", "%3E")):
+            url = url.replace(char, escaped)
+        return f"[{content.strip() or url}]({url})"
+    if tag in {"p", "div", "section", "blockquote"}:
+        return "\n\n" + content.strip() + "\n\n"
+    return content
+
+
+def _task_description(selector: Selector, base_url: str) -> str | None:
+    # Confirmed on GUAP detail HTML: h5 followed by p.task-description-block.
+    blocks = selector.css(".task-description-block")
+    if not blocks:
+        return None
+    content = "\n\n".join(_description_markdown(block, base_url).strip() for block in blocks)
+    content = re.sub(r"\n[ \t]+\n", "\n\n", content)
+    content = re.sub(r"\n{3,}", "\n\n", content).strip()
+    return content if content.replace("\\", "").strip() else None
+
+
+def parse_task_detail(html: str, base_url: str, *, task_url: str | None = None) -> ParsedTaskDetail:
     selector = Selector(text=html)
     download_href = _task_assignment_pdf_href(selector)
     report_hrefs = _submitted_report_download_hrefs(selector)
@@ -266,6 +310,7 @@ def parse_task_detail(html: str, base_url: str) -> ParsedTaskDetail:
         ],
         has_upload_form=bool(selector.css("input[type='file']#file").get()),
         awaiting_review="ожидает проверки" in status_text,
+        description=_task_description(selector, task_url or base_url),
     )
 
 

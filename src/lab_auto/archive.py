@@ -68,6 +68,7 @@ def archive_removed_works(
                 task_url=previous.task_url,
                 task_site_id=previous.task_site_id,
                 due_date=previous.due_date,
+                description=previous.description,
                 website_status=previous.website_status,
                 local_status=previous.local_status,
                 folder=previous.folder,

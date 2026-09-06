@@ -22,6 +22,7 @@ This repository also ships an **[AgentSkills](https://agentskills.io/) skill** (
 
 - 🔄 **Sync** — scrape task list (100 rows/page), update `state/works.yaml`, rename `labs/<subject>/[STATUS] …/` folders
 - 📥 **Downloads** — `task.pdf` (assignment); `reports/site-report-<id>.pdf` on first sync when GUAP has a submission (`не принят` / `ожидает проверки` / `принят`)
+- 📝 **Task descriptions** — Markdown in `works.yaml` and generated `task.md`, preserving paragraphs, line breaks, lists, and links. Each sync fetches every active task's detail page once, including tasks with a cached PDF. `task.md` is regenerated when its content changes; local edits may be overwritten. Archived tasks are left untouched. The general Materials page is not processed.
 - 🏷️ **Status mapping** — GUAP labels → `[UNDONE]` / `[REFACTOR]` / `[SENT]` / `[DONE]` / `[UNKNOWN]`; local-only `[REVIEW]` / `[SENTFAILED]`
 - 📋 **State files** — `works.yaml`, `summary.md`, `needs_review.md`, append-only logs
 - 🔐 **Session** — Fernet-encrypted Playwright `storage_state`; SSO via `auth login` (headed browser)
@@ -105,6 +106,7 @@ workspace/
 ├── labs/
 │   └── <subject>/
 │       └── [SENT] Lab title [178541]/
+│           ├── task.md
 │           ├── task.pdf
 │           └── reports/
 │               └── site-report-5283063.pdf
