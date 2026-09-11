@@ -8,6 +8,7 @@ from typing import Any
 from lab_auto.archive import archive_removed_works
 from lab_auto.browser import BASE_URL, BrowserService, BrowserSession, TaskPageTriggersDownloadError
 from lab_auto.logging import LogKind, append_log
+from lab_auto.materials import MaterialDownloader
 from lab_auto.models import LocalStatus, WorkRecord, merge_state_after_sync, resolve_local_status, status_from_website
 from lab_auto.parsers import (
     ParsedTaskDetail,
@@ -32,6 +33,12 @@ from lab_auto.state import (
     lookup_previous_work,
     save_state_unlocked,
 )
+from lab_auto.subject_materials import (
+    SubjectMaterialsResult,
+    load_subject_materials,
+    save_subject_materials,
+    sync_subject_materials,
+)
 
 
 @dataclass(slots=True)
@@ -48,16 +55,19 @@ class SyncService:
         root: Path,
         browser: BrowserService | Any | None = None,
         base_url: str = BASE_URL,
+        material_downloader: MaterialDownloader | None = None,
     ) -> None:
         self.root = root
         self.browser = browser or BrowserService(root)
         self.base_url = base_url
+        self.material_downloader = material_downloader or MaterialDownloader()
 
     def sync(self, *, archive_removed: bool = False) -> SyncResult:
         now = datetime.now().astimezone().isoformat(timespec="seconds")
 
         with locked_workspace(self.root):
             old_records = load_state_unlocked(self.root)
+            old_subject_materials = load_subject_materials(self.root)
         old_by_id = {record.work_id: record for record in old_records}
         old_by_url = {record.task_url: record for record in old_records}
 
@@ -156,9 +166,17 @@ class SyncService:
                         now=now,
                     )
 
+                material = self.material_downloader.sync(
+                    detail.additional_material_url, folder,
+                    previous.additional_material if previous else None,
+                )
+                if material.warning:
+                    append_log(self.root, LogKind.AI, f"{work_id}: {material.warning}", now=now)
+
                 records_by_id[work_id] = WorkRecord(
                     work_id=work_id,
                     subject=task.subject,
+                    subject_site_id=task.subject_site_id,
                     name=task.name,
                     number=task.number,
                     task_url=task_url,
@@ -166,6 +184,7 @@ class SyncService:
                     due_date=task.due_date,
                     description=detail.description,
                     additional_material_url=detail.additional_material_url,
+                    additional_material=material.file,
                     website_status=task.website_status,
                     local_status=local_status,
                     folder=folder,
@@ -180,6 +199,19 @@ class SyncService:
 
             records = list(records_by_id.values())
             synced_ids = set(records_by_id)
+            if hasattr(session, "materials_html"):
+                subject_materials_result = sync_subject_materials(
+                    self.root,
+                    session,
+                    old_subject_materials,
+                    self.material_downloader,
+                    base_url=self.base_url,
+                    now=now,
+                )
+            else:
+                subject_materials_result = SubjectMaterialsResult(
+                    old_subject_materials, [], False
+                )
 
         dropped_from_site = sorted(
             work_id
@@ -212,9 +244,15 @@ class SyncService:
                 dropped_ids=dropped_ids,
             )
             save_state_unlocked(self.root, records)
+            if subject_materials_result.page_loaded:
+                save_subject_materials(self.root, subject_materials_result.materials)
             for work in active_works(records):
                 if work.work_id in synced_ids:
-                    generate_task_markdown(work)
+                    generate_task_markdown(
+                        work,
+                        subject_materials_result.materials,
+                        root=self.root,
+                    )
 
         generate_markdown_views(self.root, records)
         active_count = len(active_works(records))
@@ -225,6 +263,8 @@ class SyncService:
         if dropped_from_site and not archive_removed:
             message += f", {len(dropped_from_site)} dropped from site"
         append_log(self.root, LogKind.AI, message, now=now)
+        for warning in subject_materials_result.warnings:
+            append_log(self.root, LogKind.AI, warning, now=now)
         return SyncResult(
             records=records,
             dropped_from_site=dropped_from_site,

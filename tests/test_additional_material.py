@@ -85,7 +85,7 @@ def test_sync_refreshes_url_without_extra_fetch_or_duplicate_pdf(tmp_path, monke
         assert work.task_pdf.is_file()
         assert list(work.folder.glob("*.pdf")) == [work.task_pdf]
         content = (work.folder / "task.md").read_text(encoding="utf-8")
-        assert f"[Открыть материал]({OPEN_URL})" in content
+        assert f"[Открыть внешний материал]({OPEN_URL})" in content
         assert "[task.pdf](task.pdf)" in content
     assert all(url == DOWNLOAD_URL for url, _ in browser.downloads)
 

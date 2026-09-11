@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -96,6 +96,7 @@ _WORKFLOW_LOCAL_STATUSES = frozenset({
 _WORK_RECORD_FIELDS = frozenset({
     "work_id",
     "subject",
+    "subject_site_id",
     "name",
     "number",
     "task_url",
@@ -103,6 +104,7 @@ _WORK_RECORD_FIELDS = frozenset({
     "due_date",
     "description",
     "additional_material_url",
+    "additional_material",
     "website_status",
     "local_status",
     "folder",
@@ -114,6 +116,15 @@ _WORK_RECORD_FIELDS = frozenset({
     "archived",
     "archived_at",
 })
+
+
+@dataclass(slots=True)
+class MaterialFile:
+    source_url: str
+    path: str  # Relative to the work folder, so status renames remain safe.
+    etag: str | None = None
+    last_modified: str | None = None
+    remote_version: str | None = None
 
 
 @dataclass(slots=True)
@@ -137,11 +148,14 @@ class WorkRecord:
     task_site_id: str | None = None
     description: str | None = None
     additional_material_url: str | None = None
+    additional_material: MaterialFile | None = None
+    subject_site_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "work_id": self.work_id,
             "subject": self.subject,
+            "subject_site_id": self.subject_site_id,
             "name": self.name,
             "number": self.number,
             "task_url": self.task_url,
@@ -149,6 +163,7 @@ class WorkRecord:
             "due_date": self.due_date,
             "description": self.description,
             "additional_material_url": self.additional_material_url,
+            "additional_material": asdict(self.additional_material) if self.additional_material else None,
             "website_status": self.website_status,
             "local_status": self.local_status.value,
             "folder": str(self.folder),
@@ -168,6 +183,8 @@ class WorkRecord:
             raise ValueError(f"Unknown work record fields: {', '.join(sorted(unknown))}")
 
         values = {key: data.get(key) for key in _WORK_RECORD_FIELDS}
+        material = values.get("additional_material")
+        values["additional_material"] = MaterialFile(**material) if material else None
         task_url = values.get("task_url") or ""
         if not values.get("task_site_id") and task_url:
             from lab_auto.paths import extract_task_site_id
@@ -251,6 +268,7 @@ def merge_synced_work(synced: WorkRecord, on_disk: WorkRecord | None) -> WorkRec
     return WorkRecord(
         work_id=synced.work_id,
         subject=synced.subject,
+        subject_site_id=synced.subject_site_id or on_disk.subject_site_id,
         name=synced.name,
         number=synced.number,
         task_url=synced.task_url,
@@ -258,6 +276,7 @@ def merge_synced_work(synced: WorkRecord, on_disk: WorkRecord | None) -> WorkRec
         due_date=synced.due_date,
         description=synced.description,
         additional_material_url=synced.additional_material_url,
+        additional_material=synced.additional_material,
         website_status=synced.website_status,
         local_status=local_status,
         folder=synced.folder,

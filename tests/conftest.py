@@ -1,11 +1,27 @@
 from __future__ import annotations
 
 from pathlib import Path
+from urllib.error import URLError
+
+import pytest
 
 from lab_auto.parsers import ParsedTask, parse_task_list
 
 FIXTURES = Path(__file__).parent / "fixtures"
 BASE_URL = "https://pro.guap.ru"
+
+
+@pytest.fixture(autouse=True)
+def isolate_external_material_http(monkeypatch, request):
+    """Unit tests must never download real external resources from local captures."""
+    if request.node.get_closest_marker("live"):
+        return
+
+    class OfflineOpener:
+        def open(self, *args, **kwargs):
+            raise URLError("external HTTP disabled in unit tests")
+
+    monkeypatch.setattr("lab_auto.materials.build_opener", lambda *args: OfflineOpener())
 
 # Anonymous markup matching GUAP table shape — safe to commit (no real student data).
 SYNTHETIC_TASK_LIST_HTML = """

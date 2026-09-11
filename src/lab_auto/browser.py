@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import secrets
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -23,6 +25,8 @@ LOGIN_QUERY = {
 TASKS_URL = f"{BASE_URL}/inside/student/tasks/"
 TASK_LIST_PER_PAGE = 100
 TASKS_LIST_URL = f"{TASKS_URL}?perPage={TASK_LIST_PER_PAGE}"
+MATERIALS_URL = f"{BASE_URL}/inside/student/materials"
+MATERIALS_LIST_URL = f"{MATERIALS_URL}?perPage={TASK_LIST_PER_PAGE}"
 SESSION_DIR = "session"
 _PAGE_LOAD_STATE = "domcontentloaded"
 _DEFAULT_TIMEOUT_MS = 60_000
@@ -108,6 +112,9 @@ class BrowserSession:
         finally:
             page.close()
 
+    def materials_html(self) -> str:
+        return self.page_html(MATERIALS_LIST_URL)
+
     def page_html(self, url: str) -> str:
         if "/inside/student/tasks/" in url:
             url = canonical_task_detail_url(url, BASE_URL)
@@ -142,6 +149,49 @@ class BrowserSession:
                 ) from exc
             destination.write_bytes(response.body())
         finally:
+            page.close()
+
+    def download_named_file(
+        self,
+        url: str,
+        directory: Path,
+        title: str,
+        *,
+        existing: Path | None = None,
+    ) -> Path:
+        """Download a GUAP material atomically, retaining its server extension."""
+        from lab_auto.paths import safe_name
+
+        directory.mkdir(parents=True, exist_ok=True)
+        page = self.new_page()
+        temporary: Path | None = None
+        try:
+            with page.expect_download(timeout=_DEFAULT_TIMEOUT_MS) as download_info:
+                try:
+                    page.goto(url, timeout=_DEFAULT_TIMEOUT_MS)
+                except Exception as exc:
+                    if "Download is starting" not in str(exc):
+                        raise
+            download = download_info.value
+            suggested = safe_name(Path(download.suggested_filename).name)
+            suffix = "".join(Path(suggested).suffixes)
+            target_name = safe_name(title)
+            if suffix and not target_name.lower().endswith(suffix.lower()):
+                target_name = safe_name(target_name + suffix)
+            destination = existing if existing and existing.parent.resolve() == directory.resolve() else directory / target_name
+            if destination.exists() and destination != existing:
+                index = 2
+                while destination.exists():
+                    destination = directory / f"{Path(target_name).stem}-{index}{Path(target_name).suffix}"
+                    index += 1
+            with tempfile.NamedTemporaryFile(dir=directory, suffix=".tmp", delete=False) as stream:
+                temporary = Path(stream.name)
+            download.save_as(str(temporary))
+            os.replace(temporary, destination)
+            return destination
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
             page.close()
 
 

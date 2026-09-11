@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 from typing import Iterator
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 from parsel import Selector
 
@@ -21,6 +22,18 @@ class ParsedTask:
     task_site_id: str
     due_date: str | None
     website_status: str
+    subject_site_id: str | None = None
+
+
+@dataclass(slots=True)
+class ParsedSubjectMaterial:
+    material_id: str
+    subject: str
+    subject_site_id: str | None
+    title: str
+    added_at: str | None
+    source_url: str | None
+    download_url: str | None
 
 
 @dataclass(slots=True)
@@ -143,6 +156,9 @@ def _iter_list_rows(selector: Selector, base_url: str) -> Iterator[dict[str, str
                 continue
             yield {
                 "subject": clean_text(cells[indexes["Дисциплина"]].xpath("string()").get()),
+                "subject_url": cells[indexes["Дисциплина"]].css(
+                    "a[href*='/inside/students/subjects/']::attr(href)"
+                ).get() or "",
                 "name": name,
                 "status": _list_row_status_text(cells[indexes["Статус"]]),
                 "due_date": clean_text(cells[indexes["Предельная дата"]].xpath("string()").get()),
@@ -206,10 +222,64 @@ def parse_task_list(html: str, base_url: str) -> list[ParsedTask]:
             task_site_id=extract_task_site_id(task_url),
             due_date=row["due_date"] or None,
             website_status=row["status"],
+            subject_site_id=_site_id_from_url(row["subject_url"], "subjects") or None,
         )
         validate_parsed_task(task)
         tasks.append(task)
     return tasks
+
+
+def _site_id_from_url(url: str | None, resource: str) -> str:
+    if not url:
+        return ""
+    match = re.search(rf"/inside/(?:student|students)/{re.escape(resource)}/([^/]+)",
+                      urlparse(urljoin("https://pro.guap.ru", url)).path, re.IGNORECASE)
+    return match.group(1) if match else ""
+
+
+def parse_subject_materials(html: str, base_url: str) -> list[ParsedSubjectMaterial]:
+    selector = Selector(text=html)
+    expected = ["Файл/Ссылка", "Дисциплина", "Название", "Дата добавления", "Преподаватель"]
+    table = next((table for table in selector.css("table")
+                  if [clean_text(cell.xpath("string()").get()) for cell in table.css("thead th")] == expected), None)
+    if table is None:
+        raise ValueError("Materials table with expected headers was not found.")
+    materials: list[ParsedSubjectMaterial] = []
+    seen: set[str] = set()
+    for row in table.css("tbody tr"):
+        cells = row.css("td")
+        if len(cells) < 5:
+            continue
+        subject = clean_text(cells[1].xpath("string()").get())
+        title = clean_text(cells[2].xpath("string()").get())
+        subject_href = cells[1].css("a[href*='/inside/students/subjects/']::attr(href)").get()
+        subject_site_id = _site_id_from_url(subject_href, "subjects") or None
+        download_href = cells[0].css(
+            "a[href*='/inside/student/materials/'][href*='/download']::attr(href)"
+        ).get()
+        view_href = next((href for href in cells[0].css("a::attr(href)").getall()
+                          if href and href != download_href), None)
+        if not subject or not title or not (download_href or view_href):
+            continue
+        download_url = urljoin(base_url, download_href) if download_href else None
+        source_url = urljoin(base_url, view_href) if view_href else None
+        material_id = _site_id_from_url(download_url, "materials")
+        if not material_id:
+            identity = "\0".join((subject_site_id or clean_text(subject).casefold(), title, source_url or ""))
+            material_id = "external-" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:20]
+        if material_id in seen:
+            continue
+        seen.add(material_id)
+        materials.append(ParsedSubjectMaterial(
+            material_id=material_id,
+            subject=subject,
+            subject_site_id=subject_site_id,
+            title=title,
+            added_at=clean_text(cells[3].xpath("string()").get()) or None,
+            source_url=source_url,
+            download_url=download_url,
+        ))
+    return materials
 
 
 def _reports_table_statuses(selector: Selector) -> list[str]:

@@ -1,8 +1,9 @@
 import json
+from pathlib import Path
 
 import pytest
 
-from lab_auto.browser import SESSION_DIR, BrowserService, session_path
+from lab_auto.browser import BrowserSession, SESSION_DIR, BrowserService, session_path
 from lab_auto.session_crypto import SessionKeyError, ensure_session_key
 from lab_auto.session_store import unwrap_storage_state
 
@@ -45,3 +46,39 @@ def test_logout_deletes_session_file(tmp_path):
 
     assert BrowserService(tmp_path).logout() is True
     assert not path.exists()
+
+
+def test_download_named_file_uses_server_extension_and_avoids_collision(tmp_path, monkeypatch):
+    class Download:
+        suggested_filename = "server.pdf"
+
+        def save_as(self, destination):
+            Path(destination).write_bytes(b"pdf")
+
+    class DownloadInfo:
+        value = Download()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    class Page:
+        def expect_download(self, **kwargs):
+            return DownloadInfo()
+
+        def goto(self, *args, **kwargs):
+            raise RuntimeError("Download is starting")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(BrowserSession, "new_page", lambda self: Page())
+    session = BrowserSession(None, None, None)
+    first = session.download_named_file("https://pro.guap.ru/download", tmp_path, "Пособие: часть 1")
+    second = session.download_named_file("https://pro.guap.ru/download", tmp_path, "Пособие: часть 1")
+    assert first.name == "Пособие часть 1.pdf"
+    assert second.name == "Пособие часть 1-2.pdf"
+    assert first.read_bytes() == second.read_bytes() == b"pdf"
+    assert not list(tmp_path.glob("*.tmp"))

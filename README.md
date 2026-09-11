@@ -22,7 +22,7 @@ This repository also ships an **[AgentSkills](https://agentskills.io/) skill** (
 
 - 🔄 **Sync** — scrape task list (100 rows/page), update `state/works.yaml`, rename `labs/<subject>/[STATUS] …/` folders
 - 📥 **Downloads** — `task.pdf` (assignment); `reports/site-report-<id>.pdf` on first sync when GUAP has a submission (`не принят` / `ожидает проверки` / `принят`)
-- 📝 **Task descriptions** — Markdown in `works.yaml` and generated `task.md`, preserving paragraphs, line breaks, lists, and links. Each sync fetches every active task's detail page once, including tasks with a cached PDF. `task.md` is regenerated when its content changes; local edits may be overwritten. Archived tasks are left untouched. The general Materials page is not processed.
+- 📝 **Task descriptions** — Markdown in `works.yaml` and generated `task.md`, preserving paragraphs, line breaks, lists, and links. Each sync fetches every active task's detail page once, including tasks with a cached PDF. `task.md` is regenerated when its content changes; local edits may be overwritten. Archived tasks are left untouched.
 - 🏷️ **Status mapping** — GUAP labels → `[UNDONE]` / `[REFACTOR]` / `[SENT]` / `[DONE]` / `[UNKNOWN]`; local-only `[REVIEW]` / `[SENTFAILED]`
 - 📋 **State files** — `works.yaml`, `summary.md`, `needs_review.md`, append-only logs
 - 🔐 **Session** — Fernet-encrypted Playwright `storage_state`; SSO via `auth login` (headed browser)
@@ -99,6 +99,20 @@ lab-auto status
 
 ## 📁 Workspace
 
+Additional task materials are downloaded to each work's `materials/` directory when
+an HTTP(S) response identifies a file by its filename or MIME type. Redirects are
+followed; HTML landing pages and ambiguous responses remain external links in
+`task.md`. Public Yandex Disk links use the official public API, for single files
+only; folders, authentication and captcha are not handled. No GUAP cookies are
+sent to external hosts. Downloads are limited to 100 MiB, with a 20-second socket
+timeout and a 60-second streaming limit.
+
+Existing files use conditional HTTP requests (ETag/Last-Modified), or Yandex
+resource versions, to detect updates. Without validators, a cached file is reused
+until its source URL changes or the local file is removed. Errors retain the last
+local copy and its original source, log a warning, and do not stop sync. Files are
+not unpacked, executed or removed automatically.
+
 User data stays outside the package:
 
 ```
@@ -110,8 +124,12 @@ workspace/
 │           ├── task.pdf
 │           └── reports/
 │               └── site-report-5283063.pdf
+├── materials/
+│   └── <subject>/
+│       └── Subject material.pdf
 ├── state/
 │   ├── works.yaml
+│   ├── materials.yaml
 │   ├── summary.md
 │   └── needs_review.md
 ├── session/
@@ -127,6 +145,13 @@ workspace/
 | Linux / macOS | `~/.config/lab-auto/config.yaml` |
 
 Session key: `%APPDATA%\lab-auto\session.key` or `~/.config/lab-auto/session.key`.
+
+`sync` loads the GUAP Materials page once and stores each shared subject file once
+under `materials/<subject>/`. Its independent state lives in `state/materials.yaml`.
+Works use the GUAP subject ID when available, with normalized exact-name matching
+for legacy records; semantic and fuzzy matching are not used. A removed entry is
+marked `present: false` and retained on disk. If the page is unavailable, the
+previous materials state is left unchanged.
 
 ---
 
