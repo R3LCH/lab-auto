@@ -198,7 +198,7 @@ def test_sync_drops_removed_works_without_archive_flag(tmp_path):
     assert result.dropped_from_site == ["old-work"]
 
 
-def test_sync_skips_detail_page_when_pdf_and_status_unchanged(tmp_path):
+def test_sync_refreshes_detail_without_redownloading_cached_files(tmp_path):
     html = """
     <table class="table table-bordered">
       <thead><tr>
@@ -247,7 +247,8 @@ def test_sync_skips_detail_page_when_pdf_and_status_unchanged(tmp_path):
     browser = FakeBrowser(html)
     SyncService(tmp_path, browser=browser, base_url="https://pro.guap.ru").sync()
 
-    assert browser.detail_fetches == 0
+    assert browser.detail_fetches == 1
+    assert browser.downloads == []
 
 
 def test_sync_preserves_sent_when_list_still_shows_not_accepted(tmp_path):

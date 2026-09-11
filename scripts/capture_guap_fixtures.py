@@ -21,7 +21,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--task-url",
-        required=True,
+        required=False,
         help="Full task detail URL, e.g. https://pro.guap.ru/inside/student/tasks/12345",
     )
     parser.add_argument(
@@ -30,11 +30,22 @@ def main() -> None:
         default=Path("tests/fixtures"),
         help="Directory for task_list.html and task_detail.html",
     )
+    parser.add_argument("--materials", action="store_true", help="Capture the student's Materials page.")
     args = parser.parse_args()
+    if not args.task_url and not args.materials:
+        parser.error("provide --task-url or --materials")
 
     root = resolve_workspace(args.root)
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.materials:
+        with BrowserService(root).open_session() as session:
+            html = session.page_html("https://pro.guap.ru/inside/student/materials?perPage=100")
+            (output_dir / "materials.html").write_text(html, encoding="utf-8")
+        print(f"Saved {output_dir / 'materials.html'} (private capture; do not commit)")
+        if not args.task_url:
+            return
 
     detail_url = canonical_task_detail_url(args.task_url, "https://pro.guap.ru")
 

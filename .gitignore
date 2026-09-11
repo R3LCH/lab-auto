@@ -43,6 +43,7 @@ cookies.json
 # Captured GUAP HTML — personal data / tokens (local capture only)
 tests/fixtures/task_list.html
 tests/fixtures/task_detail.html
+tests/fixtures/materials.html
 
 # Temp files from atomic writes / Playwright save
 *.tmp

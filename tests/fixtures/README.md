@@ -6,6 +6,16 @@
 
 Tests use **synthetic** HTML embedded in `tests/conftest.py` (anonymous subjects, fake task IDs).
 
+`description_only.html` and `description_with_pdf.html` are anonymous description
+fixtures. The `h5` / `p.task-description-block` structure was verified against a
+local GUAP capture; text and links are synthetic. Richer block/list markup is
+covered inline in `test_description.py`. Raw captures remain local and ignored.
+
+`subject_materials.html` is an anonymous reconstruction of the table structure
+from a browser-saved `/inside/student/materials` page. It preserves the real
+headers, link classes and URL shapes while replacing names, teachers and external
+URLs. The raw saved page is never committed.
+
 ## Optional local captures (gitignored)
 
 After `lab-auto auth login`, refresh local-only fixtures:

@@ -8,6 +8,7 @@ from typing import Any
 from lab_auto.archive import archive_removed_works
 from lab_auto.browser import BASE_URL, BrowserService, BrowserSession, TaskPageTriggersDownloadError
 from lab_auto.logging import LogKind, append_log
+from lab_auto.materials import MaterialDownloader
 from lab_auto.models import LocalStatus, WorkRecord, merge_state_after_sync, resolve_local_status, status_from_website
 from lab_auto.parsers import (
     ParsedTaskDetail,
@@ -26,10 +27,17 @@ from lab_auto.paths import (
 from lab_auto.state import (
     active_works,
     generate_markdown_views,
+    generate_task_markdown,
     load_state_unlocked,
     locked_workspace,
     lookup_previous_work,
     save_state_unlocked,
+)
+from lab_auto.subject_materials import (
+    SubjectMaterialsResult,
+    load_subject_materials,
+    save_subject_materials,
+    sync_subject_materials,
 )
 
 
@@ -47,16 +55,19 @@ class SyncService:
         root: Path,
         browser: BrowserService | Any | None = None,
         base_url: str = BASE_URL,
+        material_downloader: MaterialDownloader | None = None,
     ) -> None:
         self.root = root
         self.browser = browser or BrowserService(root)
         self.base_url = base_url
+        self.material_downloader = material_downloader or MaterialDownloader()
 
     def sync(self, *, archive_removed: bool = False) -> SyncResult:
         now = datetime.now().astimezone().isoformat(timespec="seconds")
 
         with locked_workspace(self.root):
             old_records = load_state_unlocked(self.root)
+            old_subject_materials = load_subject_materials(self.root)
         old_by_id = {record.work_id: record for record in old_records}
         old_by_url = {record.task_url: record for record in old_records}
 
@@ -133,19 +144,19 @@ class SyncService:
                     task.website_status,
                 )
 
-                if need_task_pdf or need_site_reports:
-                    detail = self._load_task_detail(session, task_url, task.task_site_id)
-                    if need_task_pdf and detail.pdf_url and not task_pdf.exists():
-                        session.download_file(detail.pdf_url, task_pdf)
-                    if need_site_reports and detail.report_download_urls:
-                        reports = self._import_site_reports(
-                            session,
-                            folder,
-                            detail.report_download_urls,
-                            reports,
-                            work_id=work_id,
-                            now=now,
-                        )
+                # Descriptions can change independently of PDFs and list metadata.
+                detail = self._load_task_detail(session, task_url, task.task_site_id)
+                if need_task_pdf and detail.pdf_url and not task_pdf.exists():
+                    session.download_file(detail.pdf_url, task_pdf)
+                if need_site_reports and detail.report_download_urls:
+                    reports = self._import_site_reports(
+                        session,
+                        folder,
+                        detail.report_download_urls,
+                        reports,
+                        work_id=work_id,
+                        now=now,
+                    )
 
                 if previous and previous.website_status != task.website_status:
                     append_log(
@@ -155,14 +166,25 @@ class SyncService:
                         now=now,
                     )
 
+                material = self.material_downloader.sync(
+                    detail.additional_material_url, folder,
+                    previous.additional_material if previous else None,
+                )
+                if material.warning:
+                    append_log(self.root, LogKind.AI, f"{work_id}: {material.warning}", now=now)
+
                 records_by_id[work_id] = WorkRecord(
                     work_id=work_id,
                     subject=task.subject,
+                    subject_site_id=task.subject_site_id,
                     name=task.name,
                     number=task.number,
                     task_url=task_url,
                     task_site_id=task.task_site_id,
                     due_date=task.due_date,
+                    description=detail.description,
+                    additional_material_url=detail.additional_material_url,
+                    additional_material=material.file,
                     website_status=task.website_status,
                     local_status=local_status,
                     folder=folder,
@@ -177,6 +199,19 @@ class SyncService:
 
             records = list(records_by_id.values())
             synced_ids = set(records_by_id)
+            if hasattr(session, "materials_html"):
+                subject_materials_result = sync_subject_materials(
+                    self.root,
+                    session,
+                    old_subject_materials,
+                    self.material_downloader,
+                    base_url=self.base_url,
+                    now=now,
+                )
+            else:
+                subject_materials_result = SubjectMaterialsResult(
+                    old_subject_materials, [], False
+                )
 
         dropped_from_site = sorted(
             work_id
@@ -209,6 +244,15 @@ class SyncService:
                 dropped_ids=dropped_ids,
             )
             save_state_unlocked(self.root, records)
+            if subject_materials_result.page_loaded:
+                save_subject_materials(self.root, subject_materials_result.materials)
+            for work in active_works(records):
+                if work.work_id in synced_ids:
+                    generate_task_markdown(
+                        work,
+                        subject_materials_result.materials,
+                        root=self.root,
+                    )
 
         generate_markdown_views(self.root, records)
         active_count = len(active_works(records))
@@ -219,6 +263,8 @@ class SyncService:
         if dropped_from_site and not archive_removed:
             message += f", {len(dropped_from_site)} dropped from site"
         append_log(self.root, LogKind.AI, message, now=now)
+        for warning in subject_materials_result.warnings:
+            append_log(self.root, LogKind.AI, warning, now=now)
         return SyncResult(
             records=records,
             dropped_from_site=dropped_from_site,
@@ -234,7 +280,7 @@ class SyncService:
     ) -> ParsedTaskDetail:
         try:
             html = session.page_html(task_url)
-            return parse_task_detail(html, self.base_url)
+            return parse_task_detail(html, self.base_url, task_url=task_url)
         except TaskPageTriggersDownloadError:
             if not task_site_id:
                 raise RuntimeError(
