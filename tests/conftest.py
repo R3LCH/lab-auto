@@ -65,7 +65,7 @@ SYNTHETIC_TASK_DETAIL_HTML = """
   <input type="file" id="file" />
   <table class="table table-bordered">
     <thead><tr><th>Статус</th><th>Файл</th></tr></thead>
-    <tbody><tr><td>не принят</td><td>—</td></tr></tbody>
+    <tbody><tr><td>не принят</td><td><a href="/inside/student/reports/100001/download">Отчёт</a></td></tr></tbody>
   </table>
 </body></html>
 """

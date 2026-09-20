@@ -9,13 +9,14 @@ from lab_auto.archive import archive_removed_works
 from lab_auto.browser import BASE_URL, BrowserService, BrowserSession, TaskPageTriggersDownloadError
 from lab_auto.logging import LogKind, append_log
 from lab_auto.materials import MaterialDownloader
-from lab_auto.models import LocalStatus, WorkRecord, merge_state_after_sync, resolve_local_status, status_from_website
+from lab_auto.models import LocalStatus, Teacher, WorkRecord, merge_state_after_sync, resolve_local_status, status_from_website
 from lab_auto.parsers import (
     ParsedTaskDetail,
     diagnose_empty_task_list,
     is_known_website_status,
     parse_task_detail,
     parse_task_list,
+    parse_teacher_profile,
 )
 from lab_auto.paths import (
     build_work_id,
@@ -39,6 +40,9 @@ from lab_auto.subject_materials import (
     save_subject_materials,
     sync_subject_materials,
 )
+
+
+from lab_auto.teachers import load_subject_teachers, load_teachers, save_teachers, subject_key
 
 
 @dataclass(slots=True)
@@ -69,6 +73,7 @@ class SyncService:
             old_records = load_state_unlocked(self.root)
             old_subject_materials = load_subject_materials(self.root)
         old_by_id = {record.work_id: record for record in old_records}
+        attempted_teachers: dict[str, Teacher | None] = {}
         old_by_url = {record.task_url: record for record in old_records}
 
         with self._open_session() as session:
@@ -146,6 +151,39 @@ class SyncService:
 
                 # Descriptions can change independently of PDFs and list metadata.
                 detail = self._load_task_detail(session, task_url, task.task_site_id)
+                teacher = previous.teacher if previous else None
+                key = subject_key(task.subject, task.subject_site_id)
+                try:
+                    with locked_workspace(self.root):
+                        teachers = load_teachers(self.root)
+                        subject_teachers = load_subject_teachers(self.root)
+                        association = subject_teachers.get(key)
+                        if association:
+                            teacher = teachers[association["profile_url"]]
+                        elif detail.teacher_url:
+                            url = detail.teacher_url
+                            if url not in teachers and url not in attempted_teachers:
+                                attempted_teachers[url] = None
+                                teachers[url] = parse_teacher_profile(session.page_html(url), url)
+                                attempted_teachers[url] = teachers[url]
+                            if url in teachers:
+                                teacher = teachers[url]
+                                subject_teachers[key] = {
+                                    "subject": task.subject,
+                                    "subject_site_id": task.subject_site_id,
+                                    "profile_url": url,
+                                    "name": teacher.name,
+                                    "positions": teacher.positions,
+                                    "report_label": teacher.report_label,
+                                }
+                                save_teachers(self.root, teachers, subject_teachers)
+                            elif not teacher and detail.teacher_name:
+                                teacher = Teacher(url, detail.teacher_name, [])
+                except Exception as exc:
+                    if not teacher and detail.teacher_url and detail.teacher_name:
+                        teacher = Teacher(detail.teacher_url, detail.teacher_name, [])
+                    append_log(self.root, LogKind.AI,
+                               f"{work_id}: teacher profile unavailable: {type(exc).__name__}", now=now)
                 if need_task_pdf and detail.pdf_url and not task_pdf.exists():
                     session.download_file(detail.pdf_url, task_pdf)
                 if need_site_reports and detail.report_download_urls:
@@ -183,6 +221,7 @@ class SyncService:
                     task_site_id=task.task_site_id,
                     due_date=task.due_date,
                     description=detail.description,
+                    teacher=teacher,
                     additional_material_url=detail.additional_material_url,
                     additional_material=material.file,
                     website_status=task.website_status,

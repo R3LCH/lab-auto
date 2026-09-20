@@ -228,6 +228,11 @@ def generate_task_markdown(
         "## Прикреплённое задание", attachment,
         "## Дополнительные материалы", material,
     ]
+    if work.teacher:
+        sections.extend([
+            "## Преподаватель", markdown_text(work.teacher.name),
+            "## Преподаватель для отчёта", markdown_text(work.teacher.report_label),
+        ])
     if subject_materials is not None and root is not None:
         from lab_auto.subject_materials import task_material_markdown
 

@@ -8,7 +8,7 @@ from urllib.parse import urljoin, urlparse
 
 from parsel import Selector
 
-from lab_auto.models import status_from_website
+from lab_auto.models import Teacher, status_from_website
 from lab_auto.paths import canonical_task_detail_url, extract_task_site_id, is_task_download_url
 _KNOWN_WEBSITE_STATUSES = frozenset({"принят", "ожидает проверки", "не принят"})
 
@@ -44,6 +44,8 @@ class ParsedTaskDetail:
     awaiting_review: bool
     description: str | None = None
     additional_material_url: str | None = None
+    teacher_url: str | None = None
+    teacher_name: str | None = None
 
 
 def clean_text(value: str | None) -> str:
@@ -380,12 +382,39 @@ def _task_description(selector: Selector, base_url: str) -> str | None:
     return content if content.replace("\\", "").strip() else None
 
 
+def parse_teacher_profile(html: str, profile_url: str) -> Teacher:
+    selector = Selector(text=html)
+    name = clean_text(selector.css("h3#fio").xpath("string()").get())
+    if not name:
+        raise ValueError("Teacher profile is missing h3#fio")
+    positions: list[str] = []
+    seen: set[str] = set()
+    for group in selector.css(".list-group"):
+        if not any(clean_text(item.xpath("string()").get()) == "Позиции"
+                   for item in group.css(".list-group-item")):
+            continue
+        for heading in group.css(".list-group-item h5"):
+            position = clean_text(heading.xpath("string()").get())
+            if position and position.casefold() not in seen:
+                seen.add(position.casefold())
+                positions.append(position)
+    return Teacher(profile_url=profile_url, name=name, positions=positions)
+
+
 def parse_task_detail(html: str, base_url: str, *, task_url: str | None = None) -> ParsedTaskDetail:
     selector = Selector(text=html)
     download_href = _task_assignment_pdf_href(selector)
     report_hrefs = _submitted_report_download_hrefs(selector)
     status_text = _detail_status_text(selector)
     material_href = _additional_material_href(selector)
+    teacher_url = None
+    teacher_name = None
+    for link in selector.css("a.link-switch.link-switch-blue[href]"):
+        url = urljoin(base_url, link.attrib["href"])
+        if urlparse(url).netloc == urlparse(base_url).netloc and re.fullmatch(r"/inside/profile/\d+/?", urlparse(url).path):
+            teacher_url = urljoin(base_url, urlparse(url).path.rstrip("/"))
+            teacher_name = clean_text(link.xpath("string()").get()) or None
+            break
     return ParsedTaskDetail(
         pdf_url=urljoin(base_url, download_href) if download_href else None,
         report_download_urls=[
@@ -395,6 +424,8 @@ def parse_task_detail(html: str, base_url: str, *, task_url: str | None = None) 
         awaiting_review="ожидает проверки" in status_text,
         description=_task_description(selector, task_url or base_url),
         additional_material_url=urljoin(task_url or base_url, material_href) if material_href else None,
+        teacher_url=teacher_url,
+        teacher_name=teacher_name,
     )
 
 

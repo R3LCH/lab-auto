@@ -103,6 +103,7 @@ _WORK_RECORD_FIELDS = frozenset({
     "task_site_id",
     "due_date",
     "description",
+    "teacher",
     "additional_material_url",
     "additional_material",
     "website_status",
@@ -128,6 +129,19 @@ class MaterialFile:
 
 
 @dataclass(slots=True)
+class Teacher:
+    profile_url: str
+    name: str
+    positions: list[str]
+
+    @property
+    def report_label(self) -> str:
+        parts = self.name.split()
+        short_name = parts[0] + " " + "".join(part[0] + "." for part in parts[1:]) if len(parts) > 1 else self.name
+        return ", ".join([*self.positions, short_name])
+
+
+@dataclass(slots=True)
 class WorkRecord:
     work_id: str
     subject: str
@@ -150,6 +164,7 @@ class WorkRecord:
     additional_material_url: str | None = None
     additional_material: MaterialFile | None = None
     subject_site_id: str | None = None
+    teacher: Teacher | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -162,6 +177,7 @@ class WorkRecord:
             "task_site_id": self.task_site_id,
             "due_date": self.due_date,
             "description": self.description,
+            "teacher": asdict(self.teacher) if self.teacher else None,
             "additional_material_url": self.additional_material_url,
             "additional_material": asdict(self.additional_material) if self.additional_material else None,
             "website_status": self.website_status,
@@ -185,6 +201,8 @@ class WorkRecord:
         values = {key: data.get(key) for key in _WORK_RECORD_FIELDS}
         material = values.get("additional_material")
         values["additional_material"] = MaterialFile(**material) if material else None
+        teacher = values.get("teacher")
+        values["teacher"] = Teacher(**teacher) if teacher else None
         task_url = values.get("task_url") or ""
         if not values.get("task_site_id") and task_url:
             from lab_auto.paths import extract_task_site_id
@@ -275,6 +293,7 @@ def merge_synced_work(synced: WorkRecord, on_disk: WorkRecord | None) -> WorkRec
         task_site_id=task_site_id,
         due_date=synced.due_date,
         description=synced.description,
+        teacher=synced.teacher or on_disk.teacher,
         additional_material_url=synced.additional_material_url,
         additional_material=synced.additional_material,
         website_status=synced.website_status,

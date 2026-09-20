@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from pathlib import Path
 
 from lab_auto.models import LocalStatus, WorkRecord

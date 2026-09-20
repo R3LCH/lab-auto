@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from lab_auto import convert as convert_module

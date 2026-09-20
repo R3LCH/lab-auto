@@ -23,6 +23,8 @@ This repository also ships an **[AgentSkills](https://agentskills.io/) skill** (
 - 🔄 **Sync** — scrape task list (100 rows/page), update `state/works.yaml`, rename `labs/<subject>/[STATUS] …/` folders
 - 📥 **Downloads** — `task.pdf` (assignment); `reports/site-report-<id>.pdf` on first sync when GUAP has a submission (`не принят` / `ожидает проверки` / `принят`)
 - 📝 **Task descriptions** — Markdown in `works.yaml` and generated `task.md`, preserving paragraphs, line breaks, lists, and links. Each sync fetches every active task's detail page once, including tasks with a cached PDF. `task.md` is regenerated when its content changes; local edits may be overwritten. Archived tasks are left untouched.
+- **Teachers** — task links identify teacher profiles; the full name and unique positions are fetched once and persisted in `state/teachers.yaml`, shared across tasks and future syncs. `works.yaml` stores the task's teacher, and `task.md` includes the full name and a report-ready label (position, surname and initials). Failed profile loads are retried on a later sync; the task-link name remains available meanwhile.
+  The `subjects` list in `teachers.yaml` explicitly records each subject's name, site ID, teacher name, unique positions, profile URL and report label. Once assigned, a subject keeps its teacher; only new subjects need a lookup. Existing cached profiles are reused for new subjects too.
 - 🏷️ **Status mapping** — GUAP labels → `[UNDONE]` / `[REFACTOR]` / `[SENT]` / `[DONE]` / `[UNKNOWN]`; local-only `[REVIEW]` / `[SENTFAILED]`
 - 📋 **State files** — `works.yaml`, `summary.md`, `needs_review.md`, append-only logs
 - 🔐 **Session** — Fernet-encrypted Playwright `storage_state`; SSO via `auth login` (headed browser)
