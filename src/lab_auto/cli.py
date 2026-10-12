@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import traceback
 from pathlib import Path
 from typing import Optional
@@ -16,12 +17,14 @@ from lab_auto.config import (
 )
 from lab_auto.context import get_context, set_context
 from lab_auto.convert import convert_docx_to_pdf, resolve_convert_paths
+from lab_auto.groups import clear_group, load_group, normalize_group_number, save_group
 from lab_auto.pdf_markdown import pdf_to_markdown
 from lab_auto.review import mark_work_review
 from lab_auto.session_crypto import SessionKeyError
 from lab_auto.state import StateFileError, active_works, archived_works, load_state
 from lab_auto.submit import SubmitService
 from lab_auto.sync import SyncService
+from lab_auto.timetable import TimetableError, TimetableNetworkError, TimetableService
 
 app = typer.Typer(
     no_args_is_help=True,
@@ -35,8 +38,13 @@ workspace_app = typer.Typer(
     no_args_is_help=True,
     help="Choose where labs, state, and session files are stored on disk.",
 )
+group_app = typer.Typer(
+    no_args_is_help=True,
+    help="Choose your GUAP group used to correct lab/practice teachers from guap.ru/rasp.",
+)
 app.add_typer(auth_app, name="auth")
 app.add_typer(workspace_app, name="workspace")
+app.add_typer(group_app, name="group")
 
 
 @app.callback()
@@ -74,6 +82,109 @@ def _fail(message: str, exc: Exception) -> None:
     if get_context().verbose:
         typer.echo(traceback.format_exc(), err=True)
     raise typer.Exit(1) from exc
+
+
+def _is_interactive() -> bool:
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def _validate_group(number: str) -> str:
+    """Normalize a group number and confirm it exists on guap.ru/rasp."""
+    normalized = normalize_group_number(number)
+    return TimetableService().resolve_group(normalized).number
+
+
+def _group_error_message(exc: Exception) -> str:
+    # TimetableNetworkError subclasses TimetableError, so it must be checked first.
+    if isinstance(exc, TimetableNetworkError):
+        return f"Could not verify group (network): {exc}"
+    if isinstance(exc, (ValueError, TimetableError)):
+        return f"Invalid group: {exc}"
+    return f"Could not verify group: {exc}"
+
+
+def _set_group(number: str) -> str:
+    validated = _validate_group(number)
+    save_group(_root(), validated)
+    return validated
+
+
+def _ensure_group_for_sync(group: Optional[str]) -> None:
+    """Save --group or ask once interactively; never blocks sync when no group is configured."""
+    if group is not None:
+        try:
+            _set_group(group)
+        except Exception as exc:
+            _fail(_group_error_message(exc), exc)
+        return
+    try:
+        saved = load_group(_root())
+    except ValueError as exc:
+        typer.echo(
+            f"Warning: saved GUAP group is invalid ({exc}); teachers come from pro.guap.ru only. "
+            "Fix it with 'lab-auto group set <number>'.",
+            err=True,
+        )
+        return
+    if saved is not None:
+        return
+    if not _is_interactive():
+        typer.echo(
+            "Warning: GUAP group not configured; teachers come from pro.guap.ru only. "
+            "Set it with 'lab-auto group set <number>' or 'lab-auto sync --group <number>'.",
+            err=True,
+        )
+        return
+    answer = typer.prompt(
+        "GUAP group for lab/practice teacher corrections (empty to skip)",
+        default="",
+        show_default=False,
+    ).strip()
+    if not answer:
+        typer.echo(
+            "Hint: group skipped; teachers come from pro.guap.ru only. "
+            "Set it later with 'lab-auto group set <number>'.",
+            err=True,
+        )
+        return
+    try:
+        validated = _set_group(answer)
+    except Exception as exc:
+        typer.echo(f"Warning: group not saved: {_group_error_message(exc)}", err=True)
+        return
+    typer.echo(f"Group set to {validated}")
+
+
+@group_app.command("set")
+def group_set(
+    number: str = typer.Argument(help="GUAP group number as shown on guap.ru/rasp, e.g. 1232."),
+) -> None:
+    """Verify the group on guap.ru/rasp and save it for teacher corrections during sync."""
+    try:
+        validated = _set_group(number)
+    except Exception as exc:
+        _fail(_group_error_message(exc), exc)
+    typer.echo(f"Group set to {validated}")
+
+
+@group_app.command("show")
+def group_show() -> None:
+    """Print the saved GUAP group."""
+    try:
+        saved = load_group(_root())
+    except Exception as exc:
+        _fail(f"Could not read saved group: {exc}", exc)
+    if saved is None:
+        typer.echo("Group not configured (use: lab-auto group set <number>)")
+    else:
+        typer.echo(f"Group: {saved}")
+
+
+@group_app.command("unset")
+def group_unset() -> None:
+    """Forget the saved GUAP group; teachers then come from pro.guap.ru only."""
+    clear_group(_root())
+    typer.echo("Group cleared")
 
 
 @workspace_app.command("show")
@@ -197,8 +308,14 @@ def sync(
         "--archive",
         help="Keep tasks removed from the website as archived instead of deleting them from state.",
     ),
+    group: Optional[str] = typer.Option(
+        None,
+        "--group",
+        help="Save and use this GUAP group for timetable teacher corrections.",
+    ),
 ) -> None:
     """Pull tasks from pro.guap.ru, update folders and works.yaml, download assignment PDFs."""
+    _ensure_group_for_sync(group)
     try:
         result = SyncService(_root()).sync(archive_removed=archive)
         active = active_works(result.records)
@@ -219,6 +336,8 @@ def sync(
                 + ", ".join(result.dropped_from_site),
                 err=True,
             )
+        for warning in result.warnings:
+            typer.echo(f"Warning: {warning}", err=True)
     except Exception as exc:
         _fail(f"Sync failed: {exc}", exc)
 

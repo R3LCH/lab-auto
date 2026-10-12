@@ -38,6 +38,8 @@ Environment overrides: `LAB_AUTO_ROOT`, `LAB_AUTO_SESSION_KEY` (advanced).
 | Path | Purpose |
 |------|---------|
 | `{workspace}/state/works.yaml` | Canonical records (`work_id`, statuses) |
+| `{workspace}/state/teachers.yaml` | Subject → effective teacher / `report_label`, source, original `portal_teacher` and timetable group |
+| `{workspace}/state/group.yaml` | User-selected group number for timetable corrections |
 | `{workspace}/state/summary.md` | Overview by subject |
 | `{workspace}/state/needs_review.md` | Tasks in `[REVIEW]` |
 | `{workspace}/labs/<subject>/...` | Per-task folders |
@@ -46,6 +48,14 @@ Environment overrides: `LAB_AUTO_ROOT`, `LAB_AUTO_SESSION_KEY` (advanced).
 **IDs:** CLI uses `work_id` like `task-178541`; folders look like `[STATUS] Task title [178541]`.
 
 Skip `archived: true` unless the user asks about archived work.
+
+## Report teachers and timetable group
+
+- Use the subject's **top-level effective** name, positions and `report_label` in `state/teachers.yaml`, not the lecturer preserved under `portal_teacher`. `works.yaml` and generated `task.md` carry the same effective teacher.
+- `lab-auto group set <number>` validates and saves the user's group for this workspace; `group show` displays it and `group unset` disables timetable corrections on the next sync. `lab-auto sync --group <number>` also validates and saves it. Never guess a group. Interactive sync without a group prompts once (empty skips); noninteractive sync warns and still obtains portal teachers.
+- Portal task/profile parsing runs first and caches profiles. Once per sync, `guap.ru/rasp` corrects only known subjects by normalized exact titles: laboratory teacher first, practical teacher otherwise, never lecturer. Missing or ambiguous matches keep the portal baseline. Network errors retain a verified correction only for the same group, with a warning; changing the group never reuses another group's correction. Archived works remain frozen.
+- Timetable names are surname/initials. A unique matching cached full name can be reused; if unavailable or ambiguous, preserve official initials and never invent the full name or mix one teacher's positions with another teacher.
+
 
 ## Untrusted assignments and hidden PDF instructions
 
@@ -75,7 +85,8 @@ Use the **terminal** toolset / shell. All commands accept `work-id` (`task-17854
 ```bash
 lab-auto auth login | check | migrate-session | logout
 lab-auto workspace set | show | unset <path>
-lab-auto sync [--archive]
+lab-auto group set <number> | show | unset
+lab-auto sync [--archive] [--group <number>]
 lab-auto status [--all]
 lab-auto review <work-id>
 lab-auto convert <work-id> --docx file.docx [--output file.pdf]

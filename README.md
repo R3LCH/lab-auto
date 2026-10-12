@@ -23,8 +23,8 @@ This repository also ships an **[AgentSkills](https://agentskills.io/) skill** (
 - 🔄 **Sync** — scrape task list (100 rows/page), update `state/works.yaml`, rename `labs/<subject>/[STATUS] …/` folders
 - 📥 **Downloads** — `task.pdf` (assignment); `reports/site-report-<id>.pdf` on first sync when GUAP has a submission (`не принят` / `ожидает проверки` / `принят`)
 - 📝 **Task descriptions** — Markdown in `works.yaml` and generated `task.md`, preserving paragraphs, line breaks, lists, and links. Each sync fetches every active task's detail page once, including tasks with a cached PDF. `task.md` is regenerated when its content changes; local edits may be overwritten. Archived tasks are left untouched.
-- **Teachers** — task links identify teacher profiles; the full name and unique positions are fetched once and persisted in `state/teachers.yaml`, shared across tasks and future syncs. `works.yaml` stores the task's teacher, and `task.md` includes the full name and a report-ready label (position, surname and initials). Failed profile loads are retried on a later sync; the task-link name remains available meanwhile.
-  The `subjects` list in `teachers.yaml` explicitly records each subject's name, site ID, teacher name, unique positions, profile URL and report label. Once assigned, a subject keeps its teacher; only new subjects need a lookup. Existing cached profiles are reused for new subjects too.
+- **Teachers** — portal task/profile extraction runs first. Full names and unique positions are cached once in `state/teachers.yaml`; failed profiles are retried. The selected group's [public timetable](https://guap.ru/rasp) then corrects existing subject teachers from laboratory lessons, or practical lessons when no laboratory teacher is available. Lectures never override the portal baseline. Subject matching uses normalized exact names, not fuzzy matching; multiple eligible teachers leave the baseline unchanged.
+  `subjects` in `teachers.yaml` contains the effective name, positions and report label, its `source` (`portal` or `timetable`), the original `portal_teacher`, and timetable group/lesson/source metadata. `works.yaml` and regenerated `task.md` use the effective teacher. Portal profiles remain cached; the timetable is checked once per sync. Missing subjects/teachers or an unset/changed group restore the portal baseline; a network outage may retain a previously verified correction only for the same group, with a warning. Timetable names are surname/initials; a unique matching cached full name is reused, otherwise initials are preserved without inventing a full name.
 - 🏷️ **Status mapping** — GUAP labels → `[UNDONE]` / `[REFACTOR]` / `[SENT]` / `[DONE]` / `[UNKNOWN]`; local-only `[REVIEW]` / `[SENTFAILED]`
 - 📋 **State files** — `works.yaml`, `summary.md`, `needs_review.md`, append-only logs
 - 🔐 **Session** — Fernet-encrypted Playwright `storage_state`; SSO via `auth login` (headed browser)
@@ -93,11 +93,14 @@ playwright install chromium
 lab-auto workspace set ~/guap-labs
 lab-auto auth login
 lab-auto auth check
+lab-auto group set 1232     # replace with your group number
 lab-auto sync
 lab-auto status
 ```
 
 `auth login` uses a visible Chromium window; `sync`, `submit`, and `auth check` run headless.
+
+`group set <number>` validates the user-facing group number on the timetable and saves it in the active workspace's `state/group.yaml`; internal timetable IDs are resolved automatically. `group show` displays it and `group unset` disables timetable corrections on the next sync. `sync --group <number>` validates and saves the group before syncing. Interactive sync without a saved group asks once (empty skips); noninteractive sync warns and still uses portal teachers, without blocking. Archived works remain unchanged.
 
 ---
 
@@ -134,6 +137,8 @@ workspace/
 ├── state/
 │   ├── works.yaml
 │   ├── materials.yaml
+│   ├── teachers.yaml       # subject → effective teacher + original portal baseline
+│   ├── group.yaml          # user's timetable group
 │   ├── summary.md
 │   └── needs_review.md
 ├── session/

@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="utf-8"><title>Расписание занятий – ГУАП</title></head>
+<body>
+<main role="main">
+			<div class="container">
+						<h1 class="my-4">Расписание занятий</h1>
+			</div>
+		<div class="container content mb-5">
+<div class="text-end mb-3 small opacity-75">Вид: <b>расширенный</b> | <a href="/rasp_sm">компактный</a></div>
+<div class="row mb-3">
+    <div class="col-12 col-md-6">
+        <p class="lead text-success lh-sm">
+            Осенний семестр
+            2026/27 учебного года<br>
+            <small>(сборка: 2026-10-05)</small>
+        </p>
+    </div>
+    <div class="col-12 col-md-6 d-print-none">
+        <div class="alert alert-light">
+            Сегодня <nobr>понедельник, 12 октября 2026 г.</nobr><br>
+            <span class="week1">▲ 7 верхняя (нечетная) неделя</span>
+        </div>
+    </div>
+</div>
+    <p id="result" class="my-3 d-print-none">Выберите группу, преподавателя, кафедру или аудиторию в форме поиска.</p>
+<div class="p-3 rounded d-print-none" style="background-color:beige;">
+    <div class="row">
+        <div class="col-12 col-sm-3 mb-2">
+            <label for="selGroup" class="form-label mb-1">Группа</label>
+        <select class="form-select guap-tom-select" id="selGroup" name="selGroup">
+            <option value="">–нет–</option>
+<option value="6266">1232</option><option value="6273">1245</option><option value="6690">1311</option><option value="6703">1331</option></select>
+        </div>
+        <div class="col-12 col-sm-9 mb-2">
+            <label for="selPrep" class="form-label mb-1">Преподаватель</label>
+        <select class="form-select guap-tom-select" id="selPrep" name="selPrep">
+            <option value="">–нет–</option>
+<option value="104">Орлов О.О., доцент, канд. техн. наук, доцент</option><option value="109">Козлов М.Е., ассистент</option><option value="105">Смирнов С.С., старший преподаватель</option><option value="103">Сидоров С.С., доцент, канд. техн. наук, доцент</option></select>
+        </div>
+    </div>
+    <div class="row">
+        <div class="col-12 col-sm-6 mb-2">
+            <label for="selChair" class="form-label mb-1">Кафедра</label>
+        <select class="form-select guap-tom-select" id="selChair" name="selChair">
+            <option value="">–нет–</option>
+</select>
+        </div>
+        <div class="col-12 col-sm-6 mb-2">
+            <label for="selRoom" class="form-label mb-1">Аудитория</label>
+        <select class="form-select guap-tom-select" id="selRoom" name="selRoom">
+            <option value="">–нет–</option>
+</select>
+        </div>
+    </div>
+    <div class="mt-3 d-flex gap-2">
+        <button id="btnSearch" type="button" class="btn btn-primary">Показать расписание</button>
+        <a class="btn btn-outline-secondary" href="?">Очистить</a>
+    </div>
+</div>
+<link rel="stylesheet" href="https://src.guap.ru/libs/tom-select/2.4.2/src/css/tom-select.bootstrap5.css">
+</div>
+	</main>
+	
+</body>
+</html>

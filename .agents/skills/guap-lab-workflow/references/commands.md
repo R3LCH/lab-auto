@@ -22,6 +22,18 @@ Install: `pip install guap-lab-auto` · CLI: `lab-auto` · Python 3.11+
 
 Override: `--root <path>` or `LAB_AUTO_ROOT=<path>`
 
+## Timetable group and report teachers
+
+| Command | Description |
+|---------|-------------|
+| `lab-auto group set <number>` | Validate the user-facing group on guap.ru/rasp; save in workspace `state/group.yaml` |
+| `lab-auto group show` | Show this workspace's group |
+| `lab-auto group unset` | Disable timetable corrections on the next sync |
+| `lab-auto sync --group <number>` | Validate/save group and sync with timetable corrections |
+
+`state/teachers.yaml` → `subjects` maps each subject to its effective `name`, unique `positions`, `report_label` and `source`; `portal_teacher` preserves the original portal teacher and `timetable` records group/kind/source. Use effective fields for reports. Sync parses the portal first, then corrects only existing subjects using laboratories (preferred) or practices, never lectures; exact normalized subject matching and no arbitrary choice between multiple teachers. Missing/unset-group matches restore the baseline. Network errors may keep a previously verified same-group correction with a warning. Timetable initials expand only to a unique cached full name. Archived works are untouched.
+
+
 ## Workflow
 
 | Command | Description |

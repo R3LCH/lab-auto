@@ -1,6 +1,8 @@
 from pathlib import Path
 
-from lab_auto.models import LocalStatus, WorkRecord, resolve_local_status, status_from_website
+import pytest
+
+from lab_auto.models import LocalStatus, Teacher, WorkRecord, resolve_local_status, status_from_website
 
 
 def test_maps_known_website_statuses_to_local_prefixes():
@@ -176,3 +178,14 @@ def test_work_record_from_dict_defaults_nullable_fields(tmp_path):
     assert restored.number is None
     assert restored.task_pdf is None
     assert restored.reports == []
+
+
+@pytest.mark.parametrize(("name", "short_name"), [
+    ("Иванов Михаил Евгеньевич", "Иванов М.Е."),
+    ("Иванов М.Е.", "Иванов М.Е."),
+    ("Иванов М. Е.", "Иванов М.Е."),
+    ("Агрба-Аршба Ю.Г.", "Агрба-Аршба Ю.Г."),
+])
+def test_report_teacher_label_preserves_supplied_initials(name, short_name):
+    teacher = Teacher("https://guap.ru/rasp?pr=2987", name, ["ассистент"])
+    assert teacher.report_label == f"ассистент, {short_name}"

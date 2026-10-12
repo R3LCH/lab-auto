@@ -32,6 +32,8 @@ session/
 labs/
 state/
 logs/
+# Private assignment sample; never publish it with source or releases.
+/prompt_injected_task.pdf
 
 # Auth / session material (if copied into the project tree)
 **/storage_state.json

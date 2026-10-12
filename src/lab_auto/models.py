@@ -137,7 +137,10 @@ class Teacher:
     @property
     def report_label(self) -> str:
         parts = self.name.split()
-        short_name = parts[0] + " " + "".join(part[0] + "." for part in parts[1:]) if len(parts) > 1 else self.name
+        short_name = (
+            parts[0] + " " + "".join(part if "." in part else part[0] + "." for part in parts[1:])
+            if len(parts) > 1 else self.name
+        )
         return ", ".join([*self.positions, short_name])
 
 

@@ -16,6 +16,13 @@ from a browser-saved `/inside/student/materials` page. It preserves the real
 headers, link classes and URL shapes while replacing names, teachers and external
 URLs. The raw saved page is never committed.
 
+`timetable_index.html` and `timetable_group_1232.html` preserve the public
+`guap.ru/rasp` group selector and lesson structure captured without login.
+Teacher names and teacher IDs are replaced with synthetic identities; scripts,
+trackers and unrelated navigation are removed. Raw captures remain local.
+Group numbers and timetable IDs deliberately differ. Tests cover a lecturer
+different from the laboratory teacher, practice fallback and shared-group lessons.
+
 ## Optional local captures (gitignored)
 
 After `lab-auto auth login`, refresh local-only fixtures:

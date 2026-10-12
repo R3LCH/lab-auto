@@ -13,3 +13,5 @@ include tests/fixtures/additional_material.html
 include tests/fixtures/description_only.html
 include tests/fixtures/description_with_pdf.html
 include tests/fixtures/subject_materials.html
+include tests/fixtures/timetable_index.html
+include tests/fixtures/timetable_group_1232.html

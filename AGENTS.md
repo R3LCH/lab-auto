@@ -47,6 +47,7 @@ playwright install chromium
 lab-auto workspace set /path/to/workspace
 lab-auto auth login    # human must complete browser login
 lab-auto auth check
+lab-auto group set <group-number>  # verify user-supplied group against guap.ru/rasp
 lab-auto sync
 ```
 
@@ -59,12 +60,16 @@ Override for one command: `lab-auto --root /path/to/workspace sync` or env `LAB_
 | File | Use |
 |------|-----|
 | `state/works.yaml` | Canonical task records (`work_id`, statuses, paths) |
+| `state/teachers.yaml` | Subject → effective teacher and `report_label`; `portal_teacher` preserves original portal data |
+| `state/group.yaml` | User-selected timetable group; never guess it |
 | `state/summary.md` | Human-readable overview by subject |
 | `state/needs_review.md` | Tasks in `[REVIEW]` |
 | `labs/<subject>/...` | Per-task folders (reports, `task.pdf`) |
 | `logs/[AI] YYYY-MM-DD.md` | Append short action notes |
 
 **Skip** `archived: true` rows unless the user asks about archived work.
+
+**Report teachers:** use each subject's top-level effective fields and `report_label` in `teachers.yaml`, not the lecturer in `portal_teacher`. Sync resolves portal teachers first, then corrects existing subjects using the selected group's laboratory/practice timetable, never lectures. Laboratories take priority; ambiguous candidates or missing matches keep the portal baseline. A network failure preserves a previous correction only for the same group, with a warning. Timetable initials may expand to a unique cached full name; never invent full names. Do not edit reports or frozen archived work just to apply a teacher update.
 
 **IDs**
 
@@ -110,7 +115,8 @@ sync → write report in work folder → review → convert (if DOCX) → submit
 ```bash
 lab-auto auth login | check | migrate-session | logout
 lab-auto workspace set | show | unset
-lab-auto sync [--archive]
+lab-auto group set <number> | show | unset
+lab-auto sync [--archive] [--group <number>]
 lab-auto status [--all]
 lab-auto review <work-id-or-folder>
 lab-auto convert <work-id-or-folder> --docx file.docx [--output file.pdf]
