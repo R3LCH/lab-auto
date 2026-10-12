@@ -13,9 +13,9 @@ from pathlib import Path
 
 import pikepdf
 import pymupdf
-from fontTools.pens.recordingPen import DecomposingRecordingPen
 from fontTools.ttLib import TTFont
 from PIL import Image, ImageChops
+from lab_auto.pdf_font_recovery import recover_font_mappings
 
 _TRUSTED_ROOTS = (
     Path("/usr/share/fonts/truetype/dejavu"),
@@ -36,23 +36,6 @@ def _references():
     return fonts
 
 
-def _outline(font, name):
-    glyphs = font.getGlyphSet()
-    pen = DecomposingRecordingPen(glyphs)
-    glyphs[name].draw(pen)
-    unit = font["head"].unitsPerEm
-    return tuple((op, tuple(None if point is None else tuple(round(v / unit, 6) for v in point)
-                           for point in points)) for op, points in pen.value)
-
-
-@lru_cache(maxsize=4096)
-def _trusted_outlines(code):
-    result = set()
-    for _, font in _references():
-        name = font.getBestCmap().get(code)
-        if name:
-            result.add(_outline(font, name))
-    return result
 
 
 def _suppress_text(source, destination):
@@ -104,12 +87,64 @@ def _suppress_text(source, destination):
         pdf.save(destination)
 
 
-def analyze(source: Path, dpi: int, stage: Path) -> list[dict]:
-    visible_texts = _recovered_visible(source)
+def _actual_programs(page):
+    """Index normalized single-glyph objects, including spaces omitted by text extraction."""
+    origins, programs = {}, {}
+    x0, _, _, y1 = page.get_cropbox()
+    stack = [(pdfium.raw.FPDFPage_GetObject(page.raw, index), pymupdf.Matrix(1, 0, 0, 1, 0, 0), 0)
+             for index in range(pdfium.raw.FPDFPage_CountObjects(page.raw))]
+    while stack:
+        obj, parent, depth = stack.pop()
+        if depth > 64:
+            raise PdfVisibilityError("PDF forms are nested too deeply")
+        matrix = pdfium.raw.FS_MATRIX()
+        if not pdfium.raw.FPDFPageObj_GetMatrix(obj, ctypes.byref(matrix)):
+            raise PdfVisibilityError("Cannot locate native glyph object")
+        transform = pymupdf.Matrix(matrix.a, matrix.b, matrix.c, matrix.d, matrix.e, matrix.f) * parent
+        kind = pdfium.raw.FPDFPageObj_GetType(obj)
+        if kind == pdfium.raw.FPDF_PAGEOBJ_FORM:
+            stack.extend((pdfium.raw.FPDFFormObj_GetObject(obj, index), transform, depth + 1)
+                         for index in range(pdfium.raw.FPDFFormObj_CountObjects(obj)))
+            continue
+        if kind != pdfium.raw.FPDF_PAGEOBJ_TEXT:
+            continue
+        font = pdfium.raw.FPDFTextObj_GetFont(obj)
+        identity = ctypes.cast(font, ctypes.c_void_p).value
+        if identity not in programs:
+            digest = None
+            length = ctypes.c_ulong()
+            if font and pdfium.raw.FPDFFont_GetIsEmbedded(font) and \
+                    pdfium.raw.FPDFFont_GetFontData(font, None, 0, ctypes.byref(length)) and length.value:
+                data = (ctypes.c_ubyte * length.value)()
+                if pdfium.raw.FPDFFont_GetFontData(font, data, length.value, ctypes.byref(length)):
+                    digest = hashlib.sha256(bytes(data)).digest()
+            programs[identity] = digest
+        px, py = transform.e - x0, y1 - transform.f
+        key = (round(px * 10), round(py * 10))
+        origins.setdefault(key, []).append((px, py, programs[identity]))
+    return origins
+
+
+def _program_at(origins, origin):
+    x, y = origin
+    key = (round(x * 10), round(y * 10))
+    candidates = {
+        digest for dx in (-1, 0, 1) for dy in (-1, 0, 1)
+        for px, py, digest in origins.get((key[0] + dx, key[1] + dy), ())
+        if abs(px - x) <= 0.02 and abs(py - y) <= 0.02
+    }
+    return next(iter(candidates)) if len(candidates) == 1 else None
+
+
+def analyze(source: Path, dpi: int, stage: Path) -> tuple[list[dict], dict]:
+    working, bindings, recovery = recover_font_mappings(source, stage, _references())
+    visible_texts, program_origins = _recovered_visible(working, source)
     suppressed = stage / "without-text.pdf"
-    _suppress_text(source, suppressed)
+    _suppress_text(working, suppressed)
     results = []
-    with pymupdf.open(source) as document, pymupdf.open(suppressed) as baseline:
+    trusted = {digest: font for digest, font in _references()}
+    rewritten = {bytes.fromhex(font["programSHA256"]) for font in recovery["fonts"] if font["rewritten"]}
+    with pymupdf.open(working) as document, pymupdf.open(suppressed) as baseline:
         for index, page in enumerate(document):
             number = index + 1
             pixmap = baseline[index].get_pixmap(dpi=dpi, alpha=False, annots=True, colorspace=pymupdf.csRGB)
@@ -120,38 +155,22 @@ def analyze(source: Path, dpi: int, stage: Path) -> list[dict]:
             # Visible non-text additions require supplementary verification. Uniform
             # backgrounds are harmless; opaque covering shapes are handled by delta.
             background_ink = any(low != high for low, high in background.getextrema())
-            fonts = {}
-            seen_fonts = set()
-            for item in page.get_fonts(full=True):
-                xref, _, _, base, _, _, *_ = item
-                if xref in seen_fonts:
-                    continue
-                seen_fonts.add(xref)
-                try:
-                    data = document.extract_font(xref)[3]
-                    font = TTFont(io.BytesIO(data), lazy=True) if data else None
-                    program_digest = hashlib.sha256(data).digest() if data else None
-                    reference = next((trusted for digest, trusted in _references()
-                                      if digest == program_digest), None)
-                except Exception:
-                    font = None
-                    reference = None
-                names = {base.split("+")[-1]}
-                if font is not None and "name" in font:
-                    names.update(record.toUnicode().replace(" ", "") for record in font["name"].names if record.nameID in {1, 4, 6})
-                for alias in names:
-                    fonts.setdefault(alias, []).append((font, reference))
-            emitted, hidden, authenticated = 0, 0, 0
-            suspicious = False
+            origins = program_origins[index]
+            emitted, hidden, authenticated, recovered = 0, 0, 0, 0
             lines = []
             last_y = None
-            for span in page.get_texttrace():
+            traces = page.get_texttrace()
+            positions = set()
+            for span in traces:
+                for _, _, origin, _ in span["chars"]:
+                    position = tuple(round(value, 3) for value in origin)
+                    if position in positions:
+                        raise PdfVisibilityError(f"Page {number}: coincident glyph identity is ambiguous")
+                    positions.add(position)
+            for span in traces:
                 direction = span["dir"]
                 if abs(direction[0] - 1) > 0.001 or abs(direction[1]) > 0.001:
                     raise ValueError(f"Page {number}: native evidence: unsupported text direction")
-                name = span["font"].split("+")[-1]
-                candidates = fonts.get(name, [])
-                source_font, reference_font = candidates[0] if len(candidates) == 1 else (None, None)
                 text = []
                 for code, gid, origin, bbox in span["chars"]:
                     if not 0 <= code <= 0x10ffff or 0xD800 <= code <= 0xDFFF:
@@ -164,24 +183,21 @@ def analyze(source: Path, dpi: int, stage: Path) -> list[dict]:
                     visible = (span["type"] != 3 and span.get("opacity", 1) > 0
                                and box[0] < box[2] and box[1] < box[3]
                                and delta.crop(box).getextrema()[1] >= 32)
-                    outline = None
-                    if source_font is not None:
-                        try:
-                            outline = _outline(source_font, source_font.getGlyphOrder()[gid])
-                        except (KeyError, IndexError, ValueError):
-                            pass
-                    # Whitespace is authenticated as an empty actual glyph, not accepted
-                    # merely because the untrusted Unicode map calls it whitespace.
+                    digest = _program_at(origins, origin)
+                    binding = bindings.get((digest, gid))
+                    if binding is None and digest not in rewritten and digest in trusted:
+                        reference = trusted[digest]
+                        order = reference.getGlyphOrder()
+                        if 0 <= gid < len(order) and reference.getBestCmap().get(code) == order[gid]:
+                            binding = char
                     if char.isspace():
-                        if outline is None or outline:
-                            raise ValueError(f"Page {number}: native authentication: whitespace hides an unverified glyph")
+                        if binding != " ":
+                            raise PdfVisibilityError(f"Page {number}: unauthenticated whitespace glyph")
                         if span["type"] != 3 and span.get("opacity", 1) > 0:
-                            text.append(char)
+                            text.append(" ")
                             emitted += 1
-                            if reference_font is not None:
-                                authenticated += 1
-                            else:
-                                suspicious = True
+                            authenticated += 1
+                            recovered += int((digest, gid) in bindings)
                         else:
                             hidden += 1
                         continue
@@ -190,19 +206,10 @@ def analyze(source: Path, dpi: int, stage: Path) -> list[dict]:
                         continue
                     if ord(char) < 32 or char in "\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069":
                         raise ValueError(f"Page {number}: native evidence: control/format character")
-                    if reference_font is not None:
-                        order = reference_font.getGlyphOrder()
-                        expected = reference_font.getBestCmap().get(code)
-                        if not 0 <= gid < len(order) or order[gid] != expected:
-                            raise ValueError(f"Page {number}: native authentication: actual glyph disagrees with trusted font mapping")
-                        authenticated += 1
-                    else:
-                        # Matching unhinted outlines cannot authenticate an arbitrary
-                        # font program: hinting and other tables can alter its pixels.
-                        trusted = _trusted_outlines(code)
-                        if outline is not None and trusted and outline not in trusted:
-                            raise ValueError(f"Page {number}: native authentication: actual glyph disagrees with trusted Unicode outline")
-                        suspicious = True
+                    if binding != char:
+                        raise PdfVisibilityError(f"Page {number}: no unique trusted binding for visible glyph {gid}")
+                    authenticated += 1
+                    recovered += int((digest, gid) in bindings)
                     text.append(char)
                     emitted += 1
                 if text:
@@ -218,18 +225,17 @@ def analyze(source: Path, dpi: int, stage: Path) -> list[dict]:
             # texttrace retains their native line/code spacing without PDFium's
             # generated separators between split single-glyph text objects.
             native = "".join(lines).strip()
-            reason = ("untrusted native glyph outlines" if suspicious else
-                      "mixed raster/vector composition" if background_ink else None)
+            reason = "mixed raster/vector composition" if background_ink else None
             results.append({"text": native, "nativePresent": bool(page.get_texttrace()),
-                            "ocrReason": reason,
+                            "verificationReason": reason,
                             "source": "native" if native else "blank",
                             "glyphs": {"emitted": emitted, "hidden": hidden,
-                                       "authenticated": authenticated}})
+                                       "authenticated": authenticated, "recovered": recovered}})
             original.close()
             background.close()
             delta.close()
     suppressed.unlink()
-    return results
+    return results, recovery
 
 
 # Recovered native normalization and per-glyph counterfactual visibility.
@@ -532,7 +538,7 @@ def _page_text(original, page, reference, page_number: int) -> str:
 
 
 
-def _recovered_visible(source):
+def _recovered_visible(source, original_source):
     with pikepdf.open(source) as pdf:
         _normalize(pdf, reference=False)
         normalized = io.BytesIO()
@@ -540,9 +546,10 @@ def _recovered_visible(source):
         _normalize(pdf, reference=True)
         reference = io.BytesIO()
         pdf.save(reference)
-    texts = []
-    with pdfium.PdfDocument(source) as original, pdfium.PdfDocument(normalized.getvalue()) as document, pdfium.PdfDocument(reference.getvalue()) as ref_document:
+    texts, program_origins = [], []
+    with pdfium.PdfDocument(original_source) as original, pdfium.PdfDocument(normalized.getvalue()) as document, pdfium.PdfDocument(reference.getvalue()) as ref_document:
         for index in range(len(document)):
             with closing(original[index]) as original_page, closing(document[index]) as page, closing(ref_document[index]) as ref_page:
+                program_origins.append(_actual_programs(page))
                 texts.append(_page_text(original_page, page, ref_page, index + 1))
-    return texts
+    return texts, program_origins
