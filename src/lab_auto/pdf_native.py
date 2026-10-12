@@ -221,7 +221,7 @@ def analyze(source: Path, dpi: int, stage: Path) -> list[dict]:
             reason = ("untrusted native glyph outlines" if suspicious else
                       "mixed raster/vector composition" if background_ink else None)
             results.append({"text": native, "nativePresent": bool(page.get_texttrace()),
-                            "ocrReason": reason,
+                            "verificationReason": reason,
                             "source": "native" if native else "blank",
                             "glyphs": {"emitted": emitted, "hidden": hidden,
                                        "authenticated": authenticated}})
