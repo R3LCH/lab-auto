@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import hashlib
 import json
 import re
@@ -173,7 +174,16 @@ def embedded_text_of(path: Path) -> str:
 
 
 def page_texts(markdown: str) -> list[str]:
-    return re.findall(r"```text\n(.*?)\n?```", markdown, flags=re.S)
+    sections = re.split(r"(?m)^## Page \d+\n", markdown)[1:]
+    texts = []
+    for section in sections:
+        state, _, body = section.lstrip().partition("\n\n")
+        if "visual-review-required" in state:
+            continue
+        body = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", body)
+        body = html.unescape(re.sub(r"\\([\\`*_{}\[\]()#+.!|>-])", r"\1", body))
+        texts.append(body.strip())
+    return texts
 
 
 def provenance(markdown: str) -> dict:
@@ -206,8 +216,8 @@ def assert_nothing_published(directory: Path, stem: str = "task") -> None:
         report = native_report(source)
         assert report["status"] == "failed"
         assert report["reason"]
-        assert all(page["status"] == "failed" and page["reason"] and page["png"] is None
-                   and page["pngSHA256"] is None for page in report["pages"])
+        assert all(page["status"] == "failed" and page["reason"] and not page["assets"]
+                   for page in report["pages"])
 
 
 # Retired with OCR removal: kept as history, not executed.
@@ -279,21 +289,11 @@ def test_native_unicode_is_published_exactly_and_bound_to_report(tmp_path):
     report = native_report(source, output)
     assert (report["status"], report["reason"]) == ("passed", None)
 
-    pages_dir = tmp_path / "task.visible.pages"
-    assert "![" not in markdown  # page images are ordinary links, never embedded inline
-    links = re.findall(r"(?<!!)\[[^\]]*\]\((task\.visible\.pages/[^)]+\.png)\)", markdown)
-    assert links == [page["png"] for page in report["pages"]]
-    for page, link in zip(report["pages"], links, strict=True):
-        name = Path(link).name
-        assert (page["status"], page["reason"], page["source"]) == ("passed", None, "native")
-        assert page["glyphs"]["authenticated"] == page["glyphs"]["emitted"] > 0
-        digest = hashlib.sha256((pages_dir / name).read_bytes()).hexdigest()
-        assert (page["png"], page["pngSHA256"]) == (f"task.visible.pages/{name}", digest)
-        assert name.endswith(f"-{digest[:16]}.png")
-        assert digest in markdown
-        with Image.open(pages_dir / name) as image:
-            assert image.size == (round(PAGE_WIDTH * 300 / 72), round(PAGE_HEIGHT * 300 / 72))
-    assert published_files(pages_dir) == {Path(link).name for link in links}
+    assert all(not page["assets"] for page in report["pages"])
+    assert all(page["unicode"] == "unverified" and page["visibility"] == "passed"
+               for page in report["pages"])
+    assert report["checks"]["fonts"] == report["checks"]["renderers"] == "not-run"
+    assert not published_files(tmp_path / "task.visible.pages")
     assert not list(tmp_path.glob(".task.visible.md.staging-*"))
 
 
@@ -303,7 +303,7 @@ def test_blank_page_beside_text_page_is_published_as_blank(tmp_path):
     assert [text.strip() for text in page_texts(output.read_text(encoding="utf-8"))] == ["ONLY PAGE WITH TEXT", ""]
     report = native_report(source, output)
     assert report["status"] == "passed"
-    assert [(page["status"], page["source"]) for page in report["pages"]] == [("passed", "native"), ("passed", "blank")]
+    assert [page["status"] for page in report["pages"]] == ["passed", "passed"]
 
 
 # Retired with OCR removal: kept as history, not executed.
@@ -460,7 +460,8 @@ def test_near_white_text_is_never_emitted(tmp_path):
 
 def _published_text_or_refusal(source: Path, **kwargs) -> str | None:
     try:
-        return page_texts(pdf_to_markdown(source, **kwargs).read_text(encoding="utf-8"))[0]
+        texts = page_texts(pdf_to_markdown(source, **kwargs).read_text(encoding="utf-8"))
+        return texts[0] if texts else None
     except PdfVisibilityError:
         assert_nothing_published(source.parent, source.stem)
         return None
@@ -477,7 +478,7 @@ def test_forged_tounicode_over_trusted_glyphs_is_never_published(tmp_path, visib
     source = make_pdf(tmp_path / "task.pdf", [T(50, 300, visible, size=28)], tounicode=overrides)
     assert visible not in embedded_text_of(source)  # the fixture really lies
 
-    text = _published_text_or_refusal(source)
+    text = _published_text_or_refusal(source, verify_fonts=True)
     if text is not None:
         # Only the authenticated glyph semantics may be published, never the forged claim.
         assert text.strip() == visible
@@ -490,7 +491,7 @@ def test_font_cmap_and_tounicode_forged_together_cannot_self_authenticate(tmp_pa
     assert "QZXJ" in embedded_text_of(source)
 
     with pytest.raises(PdfVisibilityError):
-        pdf_to_markdown(source)
+        pdf_to_markdown(source, verify_fonts=True)
     assert_nothing_published(tmp_path)
 
 
@@ -509,14 +510,34 @@ def _type3_triangle_claimed_bullet(pdf: pikepdf.Pdf, page_index: int = 0) -> Non
     pdf.pages[page_index].Resources.Font.F2 = font
 
 
-def test_type3_glyph_is_not_authenticated_by_its_name_or_tounicode(tmp_path):
-    content = b"BT /F2 24 Tf 50 300 Td <95> Tj ET\n" + T(80, 300, "Cross-Industry")
-    source = make_pdf(tmp_path / "task.pdf", [content], customize=_type3_triangle_claimed_bullet)
-    assert "•" in embedded_text_of(source)
+@pytest.mark.parametrize("tounicode", [b"<2022>", b"<0000>"])
+def test_type3_pdf_publishes_page_images_for_visual_review_and_no_text(tmp_path, tounicode):
+    # A triangle cannot authenticate a claimed bullet, with or without /ActualText.
+    def customize(pdf):
+        _type3_triangle_claimed_bullet(pdf)
+        pdf.pages[0].Resources.Font.F2.ToUnicode = pdf.make_stream(
+            b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapType 2 def "
+            b"1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfchar <95> " + tounicode
+            + b" endbfchar endcmap CMapName currentdict /CMap defineresource pop end end")
 
-    with pytest.raises(PdfVisibilityError):
-        pdf_to_markdown(source)
-    assert_nothing_published(tmp_path)
+    content = b"BT /F2 24 Tf 50 300 Td <95> Tj ET\n" + T(80, 300, "Cross-Industry")
+    source = make_pdf(tmp_path / "task.pdf", [content], customize=customize)
+    (tmp_path / "task.visible.md").write_text("previous markdown", encoding="utf-8")
+
+    output = pdf_to_markdown(source)
+    markdown = output.read_text(encoding="utf-8")
+    assert not page_texts(markdown)
+    assert "![" in markdown
+    report = native_report(source, output)
+    assert report["status"] == "visual-review-required"
+    [page] = report["pages"]
+    assert (page["status"], page["source"], page["glyphs"]) == ("visual-review-required", None, None)
+    [asset] = page["assets"]
+    assert asset["kind"] == "type3-page"
+    png = tmp_path / "task.visible.pages" / asset["png"]
+    assert hashlib.sha256(png.read_bytes()).hexdigest() == asset["pngSHA256"]
+    with Image.open(png) as image:
+        assert image.getextrema() != ((255, 255),) * 3  # the painted page, not a blank placeholder
 
 
 # --------------------------------------------------------------------------- compositing risks
@@ -524,11 +545,70 @@ def test_type3_glyph_is_not_authenticated_by_its_name_or_tounicode(tmp_path):
 VECTOR_NE = T(50, 300, "a = b", size=40) + b"0 g 2 w 80 285 m 105 335 l S\n"  # stroke turns `=` into `≠`
 
 
-def test_additive_vector_ink_cannot_be_published_as_verified_native_text(tmp_path):
+def test_additive_vector_ink_is_cropped_without_discarding_the_page(tmp_path):
     source = make_pdf(tmp_path / "task.pdf", [VECTOR_NE])
-    with pytest.raises(PdfVisibilityError):
-        pdf_to_markdown(source)
-    assert_nothing_published(tmp_path)
+    output = pdf_to_markdown(source)
+    [page] = native_report(source, output)["pages"]
+    assert page["status"] in {"passed", "recovered"}
+    assert page["unicode"] == "unverified"
+    assert page["assets"] and all(asset["kind"] == "graph" for asset in page["assets"])
+    assert all(asset["height"] < PAGE_HEIGHT * 300 / 72 for asset in page["assets"])
+
+
+# --------------------------------------------------------------------------- renderer agreement
+
+AGREE_DPI = 150
+
+
+def rendered_pair(tmp_path: Path, content: bytes, name: str = "agree"):
+    """Real PDFium/MuPDF worker output for a one-page synthetic PDF: images and char boxes."""
+    source = make_pdf(tmp_path / f"{name}.pdf", [content])
+    stage = tmp_path / f"{name}-stage"
+    stage.mkdir()
+    boxes = [pdf_markdown._render(engine, source, AGREE_DPI, stage, 1)["textBoxes"][0]
+             for engine in ("pdfium-checked", "mupdf")]
+    images = []
+    for engine in ("pdfium", "mupdf"):
+        with Image.open(stage / f"{engine}-0001.png") as opened:
+            images.append(opened.convert("RGB"))
+    return images, boxes
+
+
+def test_renderers_agree_on_plain_native_text(tmp_path):
+    (first, second), (first_boxes, second_boxes) = rendered_pair(tmp_path, NATIVE_PAGE)
+    assert first_boxes and second_boxes
+    pdf_markdown._compare_renders(first, second, AGREE_DPI, 1, first_boxes, second_boxes)
+
+
+def test_glyph_painted_by_only_one_renderer_is_refused(tmp_path):
+    (first, second), (first_boxes, second_boxes) = rendered_pair(tmp_path, T(50, 300, "KEEP M", size=40))
+    # The other engine neither paints nor reports the glyph: its box from one engine suffices.
+    x0, y0, x1, y1 = (round(value) for value in second_boxes[-1])
+    second.paste((255, 255, 255), (x0, y0, x1, y1))
+    with pytest.raises(PdfVisibilityError, match="renderings differ"):
+        pdf_markdown._compare_renders(first, second, AGREE_DPI, 1, first_boxes[:-1], second_boxes)
+    with pytest.raises(PdfVisibilityError, match="renderings differ"):
+        pdf_markdown._compare_renders(first, second, AGREE_DPI, 1, first_boxes, [])
+
+
+def test_different_glyph_shape_at_the_same_text_position_is_refused(tmp_path):
+    (first, _), (first_boxes, _) = rendered_pair(tmp_path, T(50, 300, "MOVE", size=40), "shown")
+    (_, second), (_, second_boxes) = rendered_pair(tmp_path, T(50, 300, "NOTE", size=40), "claimed")
+    with pytest.raises(PdfVisibilityError, match="renderings differ"):
+        pdf_markdown._compare_renders(first, second, AGREE_DPI, 1, first_boxes, second_boxes)
+
+
+def test_graphics_only_difference_outside_text_is_not_compared(tmp_path):
+    (first, second), (first_boxes, second_boxes) = rendered_pair(tmp_path, T(50, 300, "KEEP", size=40))
+    # A filled shape far from every char box (e.g. a renderer-specific hairline/shading result).
+    second.paste((0, 0, 0), (40, 700, 400, 800))
+    pdf_markdown._compare_renders(first, second, AGREE_DPI, 1, first_boxes, second_boxes)
+    # The same shape over the text is still a disagreement.
+    x0, y0, x1, y1 = (round(value) for value in second_boxes[0])
+    second.paste((0, 0, 0), (x0, y0, x1, y1))
+    with pytest.raises(PdfVisibilityError, match="renderings differ"):
+        pdf_markdown._compare_renders(first, second, AGREE_DPI, 1, first_boxes, second_boxes)
+
 
 
 # Retired with OCR removal: kept as history, not executed.
@@ -544,22 +624,27 @@ def test_raster_letters_on_a_native_page_are_not_silently_omitted(tmp_path):
     source = make_pdf(tmp_path / "task.pdf", [T(50, 360, "THE REPORT IS DUE ON MONDAY") + SCAN_PAGE],
                       customize=add_scan)
     assert "SUBMIT" not in embedded_text_of(source)
-    with pytest.raises(PdfVisibilityError):
-        pdf_to_markdown(source)
-    assert_nothing_published(tmp_path)
-    assert native_report(source)["pages"][0]["reason"].startswith("Page 1:")
+    output = pdf_to_markdown(source)
+    markdown = output.read_text(encoding="utf-8")
+    assert "THE REPORT IS DUE ON MONDAY" in page_texts(markdown)[0]
+    [page] = native_report(source, output)["pages"]
+    assert page["status"] in {"passed", "recovered"}
+    assert [asset["kind"] for asset in page["assets"]] == ["image"]
+    assert "SUBMIT" not in "".join(page_texts(markdown))
 
 
 # --------------------------------------------------------------------------- raster diagnostics
 
-def test_raster_only_page_is_refused_with_failed_report(tmp_path):
+def test_raster_only_page_is_published_as_screenshot_not_empty_native_text(tmp_path):
     source = make_pdf(tmp_path / "task.pdf", [SCAN_PAGE], customize=add_scan)
-    with pytest.raises(PdfVisibilityError):
-        pdf_to_markdown(source)
-    assert_nothing_published(tmp_path)
-    report = native_report(source)
-    assert report["status"] == "failed"
-    assert report["pages"][0]["reason"].startswith("Page 1:")
+    output = pdf_to_markdown(source)
+    markdown = output.read_text(encoding="utf-8")
+    report = native_report(source, output)
+    [page] = report["pages"]
+    assert page["status"] in {"passed", "recovered"}
+    assert [asset["kind"] for asset in page["assets"]] == ["image"]
+    assert page["assets"][0]["height"] < PAGE_HEIGHT * 300 / 72
+    assert "SUBMIT" not in "".join(page_texts(markdown))
 
 
 # Retired with OCR removal: kept as history, not executed.
@@ -640,32 +725,21 @@ def test_raster_only_page_is_refused_with_failed_report(tmp_path):
 
 # --------------------------------------------------------------------------- publication
 
-def test_later_page_refusal_keeps_previous_markdown_and_pngs(tmp_path):
-    def forged_second_page(pdf):
-        pdf.pages[1].Contents = pdf.make_stream(b"BT /F2 24 Tf 50 300 Td <95> Tj ET\n")
-        _type3_triangle_claimed_bullet(pdf, page_index=1)
-    source = make_pdf(tmp_path / "task.pdf", [NATIVE_PAGE, NATIVE_PAGE], customize=forged_second_page)
-    output = tmp_path / "task.visible.md"
-    output.write_text("previous markdown", encoding="utf-8")
-    pages_dir = tmp_path / "task.visible.pages"
-    pages_dir.mkdir()
-    (pages_dir / "page-0001-0000000000000000.png").write_bytes(b"previous png")
-
-    with pytest.raises(PdfVisibilityError):
-        pdf_to_markdown(source)
-
-    assert output.read_text(encoding="utf-8") == "previous markdown"
-    assert published_files(pages_dir) == {"page-0001-0000000000000000.png"}
-    assert (pages_dir / "page-0001-0000000000000000.png").read_bytes() == b"previous png"
-    assert not list(tmp_path.glob(".task.visible.md.staging-*"))
-    report = native_report(source)
-    assert report["status"] == "failed"
-    assert report["pages"][0]["reason"] and report["pages"][1]["reason"]
+def test_graph_crop_preserves_ordinary_text_on_neighboring_pages(tmp_path):
+    source = make_pdf(tmp_path / "task.pdf", [NATIVE_PAGE, VECTOR_NE])
+    output = pdf_to_markdown(source)
+    markdown = output.read_text(encoding="utf-8")
+    text = page_texts(markdown)[0]
+    assert BULLET_LINE in text and CODE_LINE in text and CYRILLIC_LINE in text
+    report = native_report(source, output)
+    assert report["status"] in {"passed", "recovered"}
+    assert not report["pages"][0]["assets"]
+    assert all(asset["kind"] == "graph" for asset in report["pages"][1]["assets"])
 
 
 @pytest.mark.parametrize("pages_existed", [False, True], ids=["new-pages-dir", "existing-pages-dir"])
 def test_markdown_write_failure_rolls_back_new_page_images(tmp_path, monkeypatch, pages_existed):
-    source = make_pdf(tmp_path / "task.pdf", [NATIVE_PAGE])
+    source = make_pdf(tmp_path / "task.pdf", [SCAN_PAGE], customize=add_scan)
     output = tmp_path / "task.visible.md"
     output.write_text("previous markdown", encoding="utf-8")
     pages_dir = tmp_path / "task.visible.pages"
@@ -721,7 +795,7 @@ def test_changed_source_hard_refusal_invalidates_old_passed_binding(tmp_path):
     previous_markdown = output.read_bytes()
     pages_dir = output.with_name(output.stem + ".pages")
     previous_pngs = {path.name: path.read_bytes() for path in pages_dir.iterdir()}
-    make_pdf(source, [b"BT /F2 24 Tf 50 300 Td <95> Tj ET\n"], customize=_type3_triangle_claimed_bullet)
+    make_pdf(source, [NATIVE_PAGE], customize=_javascript_open_action)
 
     with pytest.raises(PdfVisibilityError):
         pdf_to_markdown(source)
@@ -729,13 +803,13 @@ def test_changed_source_hard_refusal_invalidates_old_passed_binding(tmp_path):
     assert report["status"] == "failed"
     assert report["sourceSHA256"] != previous_report["sourceSHA256"]
     assert report["markdownSHA256"] is None
-    assert all(page["png"] is None and page["pngSHA256"] is None for page in report["pages"])
+    assert all(not page["assets"] for page in report["pages"])
     assert output.read_bytes() == previous_markdown
     assert {path.name: path.read_bytes() for path in pages_dir.iterdir()} == previous_pngs
 
 
 def test_tampered_content_addressed_png_blocks_republication(tmp_path):
-    source = make_pdf(tmp_path / "task.pdf", [NATIVE_PAGE])
+    source = make_pdf(tmp_path / "task.pdf", [SCAN_PAGE], customize=add_scan)
     output = pdf_to_markdown(source)
     first = output.read_text(encoding="utf-8")
     (png,) = (tmp_path / "task.visible.pages").iterdir()
@@ -834,7 +908,55 @@ def test_cli_refusal_exits_nonzero_without_publishing_markdown(tmp_path):
 
     from lab_auto.cli import app
 
-    source = make_pdf(tmp_path / "task.pdf", [SCAN_PAGE], customize=add_scan)
+    source = make_pdf(tmp_path / "task.pdf", [NATIVE_PAGE], customize=_javascript_open_action)
     result = CliRunner().invoke(app, ["pdf-to-md", str(source)])
     assert result.exit_code != 0
     assert_nothing_published(tmp_path)
+
+
+def test_mupdf_missing_tagged_parent_is_metadata_only(tmp_path):
+    def tagged(pdf):
+        node = pdf.make_indirect(pikepdf.Dictionary(S=pikepdf.Name.Artifact, K=0, Pg=pdf.pages[0].obj))
+        root = pdf.make_indirect(pikepdf.Dictionary(Type=pikepdf.Name.StructTreeRoot))
+        valid = pdf.make_indirect(pikepdf.Dictionary(S=pikepdf.Name.P, K=1, Pg=pdf.pages[0].obj, P=root))
+        root.K = [valid]
+        root.ParentTree = pdf.make_indirect(pikepdf.Dictionary(Nums=[0, [node, valid]]))
+        pdf.Root.StructTreeRoot = root
+        pdf.Root.MarkInfo = pikepdf.Dictionary(Marked=True)
+        pdf.pages[0].obj.StructParents = 0
+        pdf.pages[0].obj.Contents = pdf.make_stream(
+            b"/Artifact <</MCID 0>> BDC\n" + pdf.pages[0].obj.Contents.read_bytes()
+            + b"EMC\n/P <</MCID 1>> BDC\n" + T(50, 280, "SECOND") + b"EMC\n")
+
+    source = make_pdf(tmp_path / "tagged.pdf", [T(50, 330, "TAGGED")], customize=tagged)
+    summary = pdf_markdown._render("mupdf", source, 72, tmp_path, 1)
+    assert summary["warnings"] == "Repairing missing parent (P) in parent tree nodes"
+    assert not summary["repaired"]
+
+
+def test_mupdf_invalid_path_warning_still_refused(tmp_path):
+    source = make_pdf(tmp_path / "invalid-path.pdf", [b"10 10 l 30 30 l S\n" + T(50, 330, "PATH")])
+    with pytest.raises(PdfVisibilityError, match="repair/rendering warnings"):
+        pdf_markdown._render("mupdf", source, 72, tmp_path, 1)
+
+
+@pytest.mark.parametrize("warning", [
+    "Repairing missing parent (P) in parent tree nodes\nlineto with no current point",
+    "... repeated 2 times...",
+    "Repairing missing parent (P)",
+    "Repairing missing parent (P) in parent tree nodes extra",
+])
+def test_metadata_warning_allowlist_rejects_other_messages(warning):
+    assert not pdf_markdown._mupdf_warnings_are_metadata_only(warning)
+
+
+def test_metadata_warning_allowlist_accepts_exact_repetition():
+    assert pdf_markdown._mupdf_warnings_are_metadata_only(
+        "Repairing missing parent (P) in parent tree nodes\n... repeated 3 times...")
+
+
+def test_preflight_identifies_non_pdf_file(tmp_path):
+    source = tmp_path / "misnamed.pdf"
+    source.write_bytes(b"PK\x03\x04not a PDF")
+    with pytest.raises(PdfVisibilityError, match="file is not a PDF"):
+        pdf_markdown._render("inspect", source, 72, tmp_path, 1)

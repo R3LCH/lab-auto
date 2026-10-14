@@ -6,6 +6,9 @@ match the original byte-for-byte in both PDFium and MuPDF.
 from __future__ import annotations
 
 import hashlib
+import io
+import re
+import unicodedata
 from contextlib import closing
 from pathlib import Path
 
@@ -13,7 +16,9 @@ import pikepdf
 import pymupdf
 import pypdfium2 as pdfium
 
-from lab_auto.pdf_glyph_evidence import authenticate_program
+from fontTools.ttLib import TTFont
+
+from lab_auto.pdf_glyph_evidence import GlyphEvidence, authenticate_program, homoglyph_scripts
 from lab_auto.pdf_markdown import PdfVisibilityError
 
 _MAX_FORM_DEPTH = 64
@@ -22,17 +27,147 @@ _BFCHAR_BLOCK = 100
 _REPLACEMENT = "\ufffd"
 
 
+def _homoglyphs(glyph) -> dict[str, str] | None:
+    """Script -> letter for an ambiguous glyph whose candidates (all byte-identical trusted
+    outlines) form one Latin/Cyrillic/Greek confusable class; None otherwise."""
+    if glyph is None or glyph.status != "ambiguous":
+        return None
+    return homoglyph_scripts(glyph.candidates)
+
+
+def _empty_space(glyph) -> bool:
+    """An empty outline whose trusted twins (same metrics, also empty) are only whitespace.
+
+    _decide keeps such renumbered-subset slots "unknown" because nothing proves which
+    character the slot held. Publishing them as a plain space is still safe: the glyph paints
+    no ink, so it can neither hide nor fake visible text, and pdf_native's whitespace check
+    still refuses any space mapping whose glyph paints. Without it subsets glue words together.
+    """
+    # DejaVu Mono's empty slot is also the reference's U+FEFF/U+FFF9-FFFB (format controls)
+    # and U+FFFC (object replacement); none of these paints anything either.
+    return (glyph is not None and glyph.status == "unknown" and glyph.method == "signature"
+            and " " in glyph.candidates
+            and all(text.isspace() or unicodedata.category(text) == "Cf" or text == "\ufffc"
+                    for text in glyph.candidates))
+
+
+def _claims(font, width: int) -> dict[int, str]:
+    """Single-scalar code -> text claims of the font's own (untrusted) ToUnicode CMap.
+
+    Only consulted to choose among outline-proven homoglyph candidates of an all-ambiguous
+    word (pdf_native._resolve_homoglyphs); unparsed or multi-scalar entries yield no claim,
+    which makes that rule refuse.
+    """
+    stream = font.get("/ToUnicode")
+    if not isinstance(stream, pikepdf.Stream):
+        return {}
+    try:
+        data = stream.read_bytes().decode("latin-1")
+    except pikepdf.PdfError:
+        return {}
+    claims: dict[int, str] = {}
+
+    def text(hexa: str) -> str | None:
+        try:
+            value = bytes.fromhex(hexa).decode("utf-16-be")
+        except ValueError:
+            return None
+        return value if len(value) == 1 else None
+
+    for block in re.findall(r"beginbfchar(.*?)endbfchar", data, re.S):
+        for source, target in re.findall(r"<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]*)>", block):
+            if len(source) == 2 * width and (value := text(target)) is not None:
+                claims[int(source, 16)] = value
+    for block in re.findall(r"beginbfrange(.*?)endbfrange", data, re.S):
+        for low, high, target in re.findall(
+                r"<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*(<[0-9A-Fa-f]*>|\[[^\]]*\])", block):
+            if len(low) != 2 * width or len(high) != 2 * width:
+                continue
+            first, last = int(low, 16), int(high, 16)
+            if not 0 <= last - first < 0x10000:
+                continue
+            if target.startswith("["):
+                for offset, item in enumerate(re.findall(r"<([0-9A-Fa-f]*)>", target)[:last - first + 1]):
+                    if (value := text(item)) is not None:
+                        claims[first + offset] = value
+            elif (value := text(target[1:-1])) is not None and len(value.encode("utf-16-be")) == 2:
+                for offset in range(last - first + 1):
+                    claims[first + offset] = chr(ord(value) + offset)
+    return claims
+
+
+def _program_identity(program: bytes) -> dict[str, str | None]:
+    """Full name (name ID 4) and version (name ID 5) of an embedded program, for reporting only.
+
+    These strings are untrusted and never authenticate anything; they only tell the user which
+    licensed reference font to place into ~/.local/share/lab-auto/trusted-fonts.
+    """
+    try:
+        parsed = TTFont(io.BytesIO(program), lazy=True, checkChecksums=0)
+        try:
+            table = parsed["name"] if "name" in parsed else None
+            names = {key: table.getDebugName(key) if table else None for key in (4, 5)}
+        finally:
+            parsed.close()
+    except Exception:  # hostile program data must never escape as an exception
+        names = {4: None, 5: None}
+    clean = lambda value: re.sub(r"[^\w .,;:()+-]", "?", value)[:80] if value else None  # noqa: E731
+    return {"fontName": clean(names[4]), "fontVersion": clean(names[5])}
+
+
+
 def _object_label(obj) -> str | None:
     number, generation = obj.objgen
     return f"{number} {generation}" if number else None
 
 
+def _simple_truetype(font, descriptor):
+    """Symbolic simple TrueType without /Encoding (LibreOffice subsets): code -> gid via the
+    program's only cmap, a (1,0) table, which PDFium and MuPDF both use for such fonts.
+
+    The derived map only selects which gids get authenticated and which ToUnicode codes are
+    written; published glyphs are still keyed by the gid MuPDF actually painted, and any
+    disagreement with PDFium's recovered text fails closed in pdf_native.
+    """
+    if "/Encoding" in font:
+        return "simple TrueType font has an /Encoding"
+    if not int(descriptor.get("/Flags", 0)) & 4:
+        return "simple TrueType font is not symbolic"
+    program = descriptor.get("/FontFile2")
+    if not isinstance(program, pikepdf.Stream) or "/FontFile" in descriptor or "/FontFile3" in descriptor:
+        return "font program is not an embedded FontFile2"
+    try:
+        data = program.read_bytes()
+    except pikepdf.PdfError:
+        return "font program cannot be decoded"
+    try:
+        parsed = TTFont(io.BytesIO(data), lazy=True, checkChecksums=0)
+        try:
+            tables = parsed["cmap"].tables
+            if len(tables) != 1 or (tables[0].platformID, tables[0].platEncID) != (1, 0):
+                return "simple TrueType cmap is not a single (1,0) table"
+            mapping = {code: parsed.getGlyphID(name) for code, name in tables[0].cmap.items() if code < 256}
+        finally:
+            parsed.close()
+    except Exception as exc:  # hostile program data must never escape as an exception
+        return f"unparseable simple TrueType cmap: {type(exc).__name__}"
+    return data, mapping, 1
+
+
 def _font_program(font):
-    """Return (program bytes, cid->gid map bytes or None) for a supported font, else a reason string."""
+    """Return (program bytes, code->gid map, code width) for a supported font, else a reason string.
+
+    The map is CIDToGIDMap bytes or None (identity) for Type0, a dict for simple TrueType.
+    """
     if not font.is_indirect:
         return "font is a direct dictionary"
+    if font.get("/Subtype") == pikepdf.Name.TrueType:
+        descriptor = font.get("/FontDescriptor")
+        if not isinstance(descriptor, pikepdf.Dictionary):
+            return "font has no font descriptor"
+        return _simple_truetype(font, descriptor)
     if font.get("/Subtype") != pikepdf.Name.Type0:
-        return "font is not Type0"
+        return "font is neither Type0 nor TrueType"
     encoding = font.get("/Encoding")
     if not isinstance(encoding, pikepdf.Name) or encoding != pikepdf.Name("/Identity-H"):
         return "encoding is not Identity-H"
@@ -56,12 +191,14 @@ def _font_program(font):
         table = mapping.read_bytes() if isinstance(mapping, pikepdf.Stream) else None
     except pikepdf.PdfError:
         return "font program or CIDToGIDMap cannot be decoded"
-    return data, table
+    return data, table, 2
 
 
-def _gid(table: bytes | None, cid: int) -> int:
+def _gid(table, cid: int) -> int:
     if table is None:
         return cid
+    if isinstance(table, dict):
+        return table.get(cid, 0)
     offset = 2 * cid
     return int.from_bytes(table[offset:offset + 2], "big") if offset + 2 <= len(table) else 0
 
@@ -130,15 +267,17 @@ def _collect_used(pdf: pikepdf.Pdf):
     return used, direct
 
 
-def _tounicode(pdf: pikepdf.Pdf, entries: list[tuple[int, str]]) -> pikepdf.Stream:
+def _tounicode(pdf: pikepdf.Pdf, entries: list[tuple[int, str]], width: int) -> pikepdf.Stream:
     blocks = []
+    digits = 2 * width
     for start in range(0, len(entries), _BFCHAR_BLOCK):
         chunk = entries[start:start + _BFCHAR_BLOCK]
-        lines = "".join(f"<{code:04X}> <{text.encode('utf-16-be').hex().upper()}>\n" for code, text in chunk)
+        lines = "".join(f"<{code:0{digits}X}> <{text.encode('utf-16-be').hex().upper()}>\n" for code, text in chunk)
         blocks.append(f"{len(chunk)} beginbfchar\n{lines}endbfchar\n")
+    space = f"<{'00' * width}> <{'FF' * width}>".encode("ascii")
     return pdf.make_stream(
         b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapType 2 def\n"
-        b"1 begincodespacerange <0000> <FFFF> endcodespacerange\n"
+        b"1 begincodespacerange " + space + b" endcodespacerange\n"
         + "".join(blocks).encode("ascii")
         + b"endcmap CMapName currentdict /CMap defineresource pop end end\n")
 
@@ -183,26 +322,41 @@ def recover_font_mappings(source: Path, stage: Path, references) -> tuple[Path, 
             if isinstance(supported, str):
                 unsupported.append({"object": label, "reason": supported})
                 continue
-            if any(len(value) % 2 for value in strings):
+            program, table, width = supported
+            if any(len(value) % width for value in strings):
                 unsupported.append({"object": label, "reason": "odd-length Identity-H string"})
                 continue
-            program, table = supported
-            codes = sorted({int.from_bytes(value[i:i + 2], "big")
-                            for value in strings for i in range(0, len(value), 2)})
+            codes = sorted({int.from_bytes(value[i:i + width], "big")
+                            for value in strings for i in range(0, len(value), width)})
             if not codes:
                 continue
             gids = {code: _gid(table, code) for code in codes}
             evidence = authenticate_program(program, sorted(set(gids.values())), references)
             rewritten = evidence.status != "rejected"
+            # Untrusted ToUnicode claims per gid; a gid reached by codes claiming different text has none.
+            claimed: dict[int, set[str | None]] = {}
+            original_claims = _claims(font, width)
+            for code in codes:
+                claimed.setdefault(gids[code], set()).add(original_claims.get(code))
+
+            def glyph_entry(glyph):
+                entry = {"gid": glyph.gid, "status": glyph.status, "text": glyph.text, "method": glyph.method}
+                classes = _homoglyphs(glyph)
+                if classes:
+                    claims = claimed.get(glyph.gid, set())
+                    entry["homoglyphs"] = classes
+                    entry["claim"] = next(iter(claims)) if len(claims) == 1 else None
+                return entry
+
             fonts.append({
                 "object": label,
                 "programSHA256": hashlib.sha256(program).hexdigest(),
+                **_program_identity(program),
                 "evidence": evidence.status,
                 "reason": evidence.reason,
                 "references": list(evidence.references),
                 "rewritten": rewritten,
-                "glyphs": [{"gid": glyph.gid, "status": glyph.status, "text": glyph.text, "method": glyph.method}
-                           for _, glyph in sorted(evidence.glyphs.items())],
+                "glyphs": [glyph_entry(glyph) for _, glyph in sorted(evidence.glyphs.items())],
             })
             if not rewritten:
                 continue
@@ -210,10 +364,15 @@ def recover_font_mappings(source: Path, stage: Path, references) -> tuple[Path, 
             for code in codes:
                 glyph = evidence.glyphs.get(gids[code])
                 bound = glyph is not None and glyph.status == "bound" and glyph.text is not None
-                entries.append((code, glyph.text if bound else _REPLACEMENT))
+                if _empty_space(glyph):
+                    bound, glyph = True, GlyphEvidence(glyph.gid, "bound", " ", glyph.method, glyph.candidates)
+                classes = _homoglyphs(glyph)
+                # A confusable outline gets a fixed placeholder (its lowest candidate) so both
+                # renderers expose the painted glyph; pdf_native replaces it per word or refuses.
+                entries.append((code, glyph.text if bound else min(classes.values()) if classes else _REPLACEMENT))
                 if bound:
                     bindings[(evidence.digest, glyph.gid)] = glyph.text
-            font.ToUnicode = _tounicode(pdf, entries)
+            font.ToUnicode = _tounicode(pdf, entries, width)
         diagnostics = {"status": "unchanged", "fonts": fonts, "unsupported": unsupported, "renderCheck": None}
         if not any(entry["rewritten"] for entry in fonts):
             return source, {}, diagnostics

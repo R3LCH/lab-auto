@@ -24,6 +24,18 @@ _FORBIDDEN = frozenset({
     "CBDT", "CBLC", "sbix", "SVG ", "EBDT", "EBLC", "EBSC", "Silf", "Glat", "Gloc", "Feat", "Sill",
 })
 _REQUIRED = frozenset({"glyf", "loca", "head", "hhea", "hmtx", "maxp"})
+# Embedded bitmap strikes in a *trusted reference* (msttcorefonts ship EBDT/EBLC). Anchoring
+# compares only the reference's hinting tables and glyf outlines, never its bitmaps, and the
+# untrusted program itself must still carry none of them (_FORBIDDEN / _KNOWN in _anchored),
+# so the rasterized embedded glyph is always the compared outline.
+_REFERENCE_BITMAPS = frozenset({"EBDT", "EBLC", "EBSC"})
+# Global inputs of the hinting VM; any glyph's instructions can read them.
+_RASTER = ("fpgm", "prep", "cvt ")
+# Layout, device-metric and font-wide summary tables. PDF renderers never shape text with
+# them and subsetters rewrite them; vmtx is compared per glyph through the signature.
+_LAYOUT = frozenset({"OS/2", "hhea", "vhea", "vmtx", "hdmx", "VDMX", "LTSH", "kern", "GPOS", "GSUB",
+                     "GDEF", "JSTF", "BASE", "MATH", "PCLT", "meta", "gasp"})
+_KNOWN = _REQUIRED | _EXCLUDED | frozenset(_RASTER) | _LAYOUT
 _TRUETYPE_VERSIONS = (b"\x00\x01\x00\x00", b"true")
 _MAX_COMPONENT_DEPTH = 16
 _SIMPLE_FLAG_MASK = 0x41  # ON_CURVE_POINT | OVERLAP_SIMPLE
@@ -53,11 +65,19 @@ _ACTIVE = object()  # signature computation in progress (cycle marker)
 _TOO_DEEP = object()  # component nesting exceeded the limit from the current call depth
 
 
-def _normalized(tag: str, data: bytes) -> bytes:
-    """Zero head.checkSumAdjustment and created/modified; every other byte is anchored."""
-    if tag == "head" and len(data) >= 36:
-        return data[:8] + bytes(4) + data[12:20] + bytes(16) + data[36:]
-    return data
+def _global_key(reader, tags) -> dict[str, bytes | None] | None:
+    """Rasterizer state shared by all glyphs: hinting programs, VM limits, head flags/unitsPerEm.
+
+    Subsetters recompute maxp point/contour counts and head bbox/timestamps, so only the VM
+    limits (maxZones..maxStackElements) and head flags/unitsPerEm are anchored there.
+    """
+    maxp, head = bytes(reader["maxp"]), bytes(reader["head"])
+    if len(maxp) < 32 or maxp[:4] != b"\x00\x01\x00\x00" or len(head) < 54:
+        return None
+    key: dict[str, bytes | None] = {tag: bytes(reader[tag]) if tag in tags else None for tag in _RASTER}
+    key["maxp"] = maxp[14:26]
+    key["head"] = head[16:20]
+    return key
 
 
 def _bytecode(glyph) -> bytes:
@@ -160,17 +180,14 @@ class _Reference:
         self._glyphs = None
         self._index = None
 
-    def anchor(self):
-        """(non-excluded tag set, normalized raw tables, numGlyphs) or None when unusable."""
+    def anchor(self) -> dict[str, bytes | None] | None:
+        """Global rasterizer inputs (see _global_key) or None when unusable."""
         if self._anchor is None:
             try:
                 reader = self.font.reader
                 tags = frozenset(str(tag) for tag in reader.keys())
-                if not _REQUIRED <= tags or tags & _FORBIDDEN:
-                    self._anchor = False
-                else:
-                    tables = {tag: _normalized(tag, bytes(reader[tag])) for tag in tags - _EXCLUDED}
-                    self._anchor = (frozenset(tables), tables, self.num_glyphs)
+                usable = _REQUIRED <= tags and not tags & (_FORBIDDEN - _REFERENCE_BITMAPS)
+                self._anchor = (_global_key(reader, tags) if usable else None) or False
             except Exception:
                 self._anchor = False
         return self._anchor or None
@@ -203,6 +220,47 @@ def _reference(digest: bytes, font: TTFont) -> _Reference:
     return cached
 
 
+# Scripts whose letters subsetters routinely collapse onto one outline (А/A/Α, О/O/Ο, Г/Γ).
+_HOMOGLYPH_SCRIPTS = ("LATIN", "CYRILLIC", "GREEK")
+
+
+def _fold(text: str) -> str:
+    """Fold a letter to the character it is by Unicode definition: a <font> compatibility
+    variant (U+1D670 MATHEMATICAL MONOSPACE A) to its base letter, a canonical singleton
+    (U+212A KELVIN SIGN) to its NFC form. DejaVu Mono shares one outline for each pair; no
+    other compatibility mapping folds."""
+    if len(text) == 1 and unicodedata.decomposition(text).startswith("<font>"):
+        return unicodedata.normalize("NFKC", text)
+    return unicodedata.normalize("NFC", text)
+
+
+def homoglyph_scripts(candidates) -> dict[str, str] | None:
+    """{script: letter} when candidates are one letter per Latin/Cyrillic/Greek script, else None.
+
+    The candidates come from GlyphEvidence of an "ambiguous" glyph, i.e. every one of them is
+    the reference cmap's character for a byte-identical outline; this only names which scripts
+    the painted shape could belong to. Anything else (digits, punctuation, two letters of one
+    script, another script) is not a confusable class and stays refused.
+    """
+    scripts: dict[str, str] = {}
+    for text in candidates:
+        text = _fold(text)
+        if len(text) != 1 or not text.isalpha():
+            return None
+        script = unicodedata.name(text, "").split(" ", 1)[0]
+        if script not in _HOMOGLYPH_SCRIPTS or scripts.get(script, text) != text:
+            return None
+        scripts[script] = text
+    return scripts if len(scripts) >= 2 else None
+
+
+def letter_script(text: str) -> str | None:
+    """Script name of a letter for homoglyph resolution; None for non-letters."""
+    if not text.isalpha():
+        return None
+    return unicodedata.name(text, "").split(" ", 1)[0] or "UNKNOWN"
+
+
 def _bindable(text: str) -> bool:
     return (len(text) == 1 and unicodedata.category(text) not in _INVALID_CATEGORIES
             and (text.isprintable() or text == " "))
@@ -219,6 +277,21 @@ def _decide(gid: int, candidates, method: str, empty: bool) -> GlyphEvidence:
     if len(ordered) > 1:
         if empty and " " in ordered and all(text.isspace() for text in ordered):
             return GlyphEvidence(gid, "bound", " ", method, ordered)
+        if not empty and "-" in ordered and set(ordered) <= {"-", "\u00ad", "\u2010"}:
+            # A painted hyphen outline is a visible HYPHEN-MINUS (DejaVu Mono shares it with
+            # U+00AD and U+2010); a soft hyphen is never emitted.
+            return GlyphEvidence(gid, "bound", "-", method, ordered)
+        canonical = {unicodedata.normalize("NFC", text) for text in ordered}
+        if not empty and len(canonical) == 1 and len(text := canonical.pop()) == 1 and _bindable(text):
+            # Canonical singletons (U+037E GREEK QUESTION MARK -> ';', U+2126 OHM -> U+03A9) are
+            # the same character by Unicode definition; emitting the NFC form chooses nothing.
+            return GlyphEvidence(gid, "bound", text, method, ordered)
+        public = [text for text in ordered if unicodedata.category(text) != "Co"]
+        if not empty and len(public) == 1 and _bindable(public[0]):
+            # Symbol fonts (OpenSymbol) alias outlines into the Private Use Area; a PUA code has
+            # no standard meaning, so the one public candidate is the only character the trusted
+            # outline can denote. Two public candidates stay ambiguous.
+            return GlyphEvidence(gid, "bound", public[0], method, ordered)
         return GlyphEvidence(gid, "ambiguous", None, method, ordered)
     text = ordered[0]
     if text.isspace() and not (text == " " and empty):
@@ -276,39 +349,41 @@ def _anchored(font: TTFont, program: bytes, digest: bytes, requested, references
         tags = frozenset(str(tag) for tag in reader.keys())
         if len(tags) != struct.unpack(">H", program[4:6])[0]:
             return _rejected(digest, "duplicate table directory entries")
-        forbidden = sorted(tags & _FORBIDDEN)
-        if forbidden:
-            return _rejected(digest, "unsupported tables: " + ", ".join(forbidden))
+        unsupported = sorted((tags & _FORBIDDEN) | (tags - _KNOWN))
+        if unsupported:
+            return _rejected(digest, "unsupported tables: " + ", ".join(unsupported))
         missing = sorted(_REQUIRED - tags)
         if missing:
             return _rejected(digest, "missing required tables: " + ", ".join(missing))
-        tables = {tag: _normalized(tag, bytes(reader[tag])) for tag in tags - _EXCLUDED}
-        num_glyphs = struct.unpack(">H", tables["maxp"][4:6])[0]
+        key = _global_key(reader, tags)
+        if key is None:
+            return _rejected(digest, "unsupported maxp/head table versions")
+        num_glyphs = struct.unpack(">H", bytes(reader["maxp"])[4:6])[0]
     except Exception as exc:
         return _rejected(digest, f"unparseable program: {type(exc).__name__}")
 
-    # Global tables (fpgm/prep/cvt/maxp/head/...) must equal a reference byte for byte; the
-    # hinting VM can read them from any glyph, so per-glyph checks alone are never enough.
+    # Subsets may renumber glyphs and rewrite counts, bbox, hhea and OS/2, but the hinting VM's
+    # global inputs must equal a reference byte for byte; per-glyph checks alone are never enough.
     anchored: list[_Reference] = []
-    differing: set[str] = set()
+    closest: frozenset[str] | None = None
     for ref_digest, ref_font in references:
         try:
             reference = _reference(ref_digest, ref_font)
             anchor = reference.anchor()
         except Exception:
             continue
-        # Cheap prefilter before comparing table bytes.
-        if anchor is None or anchor[0] != frozenset(tables) or anchor[2] != num_glyphs:
+        if anchor is None:
             continue
-        changed = {tag for tag, data in tables.items() if anchor[1][tag] != data}
-        if changed:
-            differing |= changed
-        elif reference not in anchored:
-            anchored.append(reference)
+        changed = frozenset(name for name, data in key.items() if anchor[name] != data)
+        if not changed:
+            if reference not in anchored:
+                anchored.append(reference)
+        elif closest is None or len(changed) < len(closest):
+            closest = changed
     if not anchored:
-        if differing:
-            return _rejected(digest, "tables differ from trusted reference: " + ", ".join(sorted(differing)))
-        return _rejected(digest, "no trusted reference has the same table set and glyph count")
+        if closest:
+            return _rejected(digest, "tables differ from trusted reference: " + ", ".join(sorted(closest)))
+        return _rejected(digest, "no trusted reference available")
 
     try:
         # Never let the untrusted post table name glyphs; names are positional placeholders.
@@ -333,8 +408,9 @@ def _anchored_glyph(gid, program_glyphs: _Glyphs, num_glyphs: int, anchored) -> 
     signature = program_glyphs.signature(gid)
     if signature is None:
         return _invalid(gid)
+    # Index coincidence only identifies a slot when the program keeps the reference numbering.
     same_index = [reference for reference in anchored
-                  if reference.glyphs().signature(gid) == signature]
+                  if reference.num_glyphs == num_glyphs and reference.glyphs().signature(gid) == signature]
     if same_index:
         method = "same-index-signature"
         candidates = set().union(*(reference.scalars.get(gid, ()) for reference in same_index))

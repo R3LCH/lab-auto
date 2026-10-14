@@ -54,7 +54,7 @@ def test_publishes_independently_recovered_text_not_the_claim(tmp_path, mode, ex
     source = make_pdf(tmp_path / "task.pdf", [T(50, 300, "MOVE", size=48)],
                       program=program, tounicode=dict(zip("MOVE", "QZXJ")))
     digest = hashlib.sha256(source.read_bytes()).hexdigest()
-    output = pdf_to_markdown(source, dpi=144)
+    output = pdf_to_markdown(source, dpi=144, verify_fonts=True)
     assert page_texts(output.read_text())[0].strip() == expected
     assert hashlib.sha256(source.read_bytes()).hexdigest() == digest
     report = json.loads((tmp_path / "native_result_task.json").read_text())
@@ -74,7 +74,7 @@ def test_unattested_changed_glyph_or_vm_cannot_publish_claimed_unicode(tmp_path,
                       program=program_variant(mode))
     digest = hashlib.sha256(source.read_bytes()).hexdigest()
     with pytest.raises(PdfVisibilityError):
-        pdf_to_markdown(source, dpi=144)
+        pdf_to_markdown(source, dpi=144, verify_fonts=True)
     assert not source.with_suffix(".visible.md").exists()
     assert hashlib.sha256(source.read_bytes()).hexdigest() == digest
     report = json.loads((tmp_path / "native_result_task.json").read_text())
@@ -88,7 +88,7 @@ def test_actual_program_identity_survives_crop_and_rotation(tmp_path, rotation):
         pdf.pages[0].Rotate = rotation
     source = make_pdf(tmp_path / "task.pdf", [T(50, 300, "MOVE", size=48)],
                       program=program_variant("transplant"), customize=crop)
-    output = pdf_to_markdown(source, dpi=144)
+    output = pdf_to_markdown(source, dpi=144, verify_fonts=True)
     assert page_texts(output.read_text())[0].strip() == "NOVE"
 
 
@@ -107,5 +107,5 @@ def test_hidden_trusted_font_cannot_authenticate_coincident_untrusted_ink(tmp_pa
     source = make_pdf(tmp_path / "task.pdf", [visible + hidden],
                       program=program_variant("globalhint"), customize=add_trusted_hidden_font)
     with pytest.raises(PdfVisibilityError):
-        pdf_to_markdown(source, dpi=144)
+        pdf_to_markdown(source, dpi=144, verify_fonts=True)
     assert not source.with_suffix(".visible.md").exists()

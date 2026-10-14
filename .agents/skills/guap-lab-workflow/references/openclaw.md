@@ -70,6 +70,3 @@ The agent needs shell access to run `lab-auto`. Enable your OpenClaw agent’s t
 ## Human-in-the-loop
 
 OpenClaw must **not** auto-run `lab-auto submit` unless the user explicitly requests it in the same conversation.
-
-
-[You have received this identical output 3 times. Re-reading 'skills/guap-lab-workflow/references/openclaw.md:raw' will not change it — use a narrower selector (path:A-B), or proceed with the edit.]
