@@ -102,6 +102,7 @@ _WORK_RECORD_FIELDS = frozenset({
     "task_url",
     "task_site_id",
     "due_date",
+    "user_due_date",
     "description",
     "teacher",
     "additional_material_url",
@@ -168,6 +169,19 @@ class WorkRecord:
     additional_material: MaterialFile | None = None
     subject_site_id: str | None = None
     teacher: Teacher | None = None
+    # None follows the website; ISO date or UNSPECIFIED is an explicit user override.
+    user_due_date: str | None = None
+
+    @property
+    def effective_due_date(self) -> str | None:
+        """User deadline as ISO date, or None when there is no deadline."""
+        from lab_auto.dates import UNSPECIFIED, normalize_deadline, website_due_date
+
+        if self.user_due_date is None:
+            return website_due_date(self.due_date)
+        if self.user_due_date == UNSPECIFIED:
+            return None
+        return normalize_deadline(self.user_due_date)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -179,6 +193,7 @@ class WorkRecord:
             "task_url": self.task_url,
             "task_site_id": self.task_site_id,
             "due_date": self.due_date,
+            "user_due_date": self.user_due_date,
             "description": self.description,
             "teacher": asdict(self.teacher) if self.teacher else None,
             "additional_material_url": self.additional_material_url,
@@ -230,6 +245,11 @@ class WorkRecord:
         values["reports"] = reports
         values["archived"] = bool(values.get("archived", False))
         values.setdefault("archived_at", None)
+        user_due_date = values.get("user_due_date")
+        if user_due_date is not None:
+            from lab_auto.dates import normalize_user_due_date
+
+            values["user_due_date"] = normalize_user_due_date(str(user_due_date))
         return cls(**values)
 
 
@@ -295,6 +315,7 @@ def merge_synced_work(synced: WorkRecord, on_disk: WorkRecord | None) -> WorkRec
         task_url=synced.task_url,
         task_site_id=task_site_id,
         due_date=synced.due_date,
+        user_due_date=on_disk.user_due_date,
         description=synced.description,
         teacher=synced.teacher or on_disk.teacher,
         additional_material_url=synced.additional_material_url,

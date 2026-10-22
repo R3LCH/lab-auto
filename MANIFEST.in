@@ -8,6 +8,7 @@ graft docs
 graft examples
 graft scripts
 global-exclude *.py[cod]
+global-exclude dates.md
 include tests/conftest.py
 include tests/fixtures/additional_material.html
 include tests/fixtures/description_only.html

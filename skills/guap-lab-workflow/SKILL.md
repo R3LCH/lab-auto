@@ -1,7 +1,7 @@
 ---
 name: guap-lab-workflow
 description: Sync GUAP student lab tasks with lab-auto, edit reports in local folders, mark REVIEW, convert DOCX to PDF, and submit only after explicit human approval.
-version: 1.3.0
+version: 1.4.0
 platforms: [macos, linux, windows]
 metadata: {"openclaw":{"emoji":"🎓","homepage":"https://github.com/your-org/lab_automation","requires":{"bins":["lab-auto"]}},"hermes":{"emoji":"🎓","tags":["guap","education","labs","cli"],"category":"education","requires_toolsets":["terminal"]}}
 ---
@@ -42,6 +42,7 @@ Environment overrides: `LAB_AUTO_ROOT`, `LAB_AUTO_SESSION_KEY` (advanced).
 | `{workspace}/state/group.yaml` | User-selected group number for timetable corrections |
 | `{workspace}/state/summary.md` | Overview by subject |
 | `{workspace}/state/needs_review.md` | Tasks in `[REVIEW]` |
+| `{workspace}/dates.md` | Private generated deadlines, separate user/website columns; never commit/publish |
 | `{workspace}/labs/<subject>/...` | Per-task folders |
 | `{workspace}/logs/[AI] YYYY-MM-DD.md` | Short action log |
 
@@ -79,6 +80,12 @@ Skip `archived: true` unless the user asks about archived work.
 5. `lab-auto submit <work-id> --file report.pdf` — **only if the user clearly asked to submit**
 6. `lab-auto sync` — reconcile status
 
+## Deadlines
+
+`sync` reads the task list's Предельная дата and generates private workspace-root `dates.md`. `lab-auto dates` refreshes it offline. Its `user` date defaults to the website and has priority: edit only the user cell or use `lab-auto dates set <work-id> YYYY-MM-DD` (also accepts DD.MM.YYYY). Explicit `UNSPECIFIED` clears a deadline; `lab-auto dates reset <work-id>` restores following the website. Overrides survive sync; summary/task deadlines use the effective user-first date.
+
+Dated rows sort by user date ascending; the final UNSPECIFIED section sorts by subject/name/ID. Archived work is excluded. Preserve work IDs and generated baseline metadata; invalid/duplicate rows must be corrected, never silently discarded. `dates.md`, works.yaml and captured portal HTML contain sensitive user data: never commit/package/upload them. Do not mistake generated website/name cells for editable date authority.
+
 ## Commands (terminal)
 
 Use the **terminal** toolset / shell. All commands accept `work-id` (`task-178541`), folder name, or relative folder path.
@@ -88,6 +95,9 @@ lab-auto auth login | check | migrate-session | logout
 lab-auto workspace set | show | unset <path>
 lab-auto group set <number> | show | unset
 lab-auto sync [--archive] [--group <number>]
+lab-auto dates
+lab-auto dates set <work-id> <YYYY-MM-DD|DD.MM.YYYY|UNSPECIFIED>
+lab-auto dates reset <work-id>
 lab-auto status [--all]
 lab-auto review <work-id>
 lab-auto convert <work-id> --docx file.docx [--output file.pdf]

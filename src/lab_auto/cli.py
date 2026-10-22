@@ -18,6 +18,7 @@ from lab_auto.config import (
 )
 from lab_auto.context import get_context, set_context
 from lab_auto.convert import convert_docx_to_pdf, resolve_convert_paths
+from lab_auto.dates import refresh_dates, set_user_due_date
 from lab_auto.groups import clear_group, load_group, normalize_group_number, save_group
 from lab_auto.pdf_markdown import pdf_to_markdown
 from lab_auto.review import mark_work_review
@@ -43,9 +44,15 @@ group_app = typer.Typer(
     no_args_is_help=True,
     help="Choose your GUAP group used to correct lab/practice teachers from guap.ru/rasp.",
 )
+dates_app = typer.Typer(
+    invoke_without_command=True,
+    no_args_is_help=False,
+    help="Generate private dates.md and manage user deadlines independently of website dates.",
+)
 app.add_typer(auth_app, name="auth")
 app.add_typer(workspace_app, name="workspace")
 app.add_typer(group_app, name="group")
+app.add_typer(dates_app, name="dates")
 
 
 @app.callback()
@@ -300,6 +307,43 @@ def login() -> None:
         typer.echo("Login succeeded and local session was saved.")
     except Exception as exc:
         _fail(f"Login failed: {exc}", exc)
+
+
+@dates_app.callback()
+def dates(ctx: typer.Context) -> None:
+    """Refresh dates.md from local state, preserving edits to its user column."""
+    if ctx.invoked_subcommand is not None:
+        return
+    try:
+        path = refresh_dates(_root())
+        typer.echo(f"Dates -> {path}")
+    except Exception as exc:
+        _fail(f"Dates refresh failed: {exc}", exc)
+
+
+@dates_app.command("set")
+def dates_set(
+    work_ref: str = typer.Argument(help="Work ID (task-178541) or task folder."),
+    date: str = typer.Argument(help="User deadline: YYYY-MM-DD, DD.MM.YYYY or UNSPECIFIED."),
+) -> None:
+    """Override a deadline without changing its website date."""
+    try:
+        work = set_user_due_date(_root(), work_ref, date)
+        typer.echo(f"{work.work_id}: user = {work.effective_due_date or 'UNSPECIFIED'}")
+    except Exception as exc:
+        _fail(f"Deadline update failed: {exc}", exc)
+
+
+@dates_app.command("reset")
+def dates_reset(
+    work_ref: str = typer.Argument(help="Work ID (task-178541) or task folder."),
+) -> None:
+    """Reset the user deadline to follow the website date."""
+    try:
+        work = set_user_due_date(_root(), work_ref, None)
+        typer.echo(f"{work.work_id}: user follows website ({work.effective_due_date or 'UNSPECIFIED'})")
+    except Exception as exc:
+        _fail(f"Deadline reset failed: {exc}", exc)
 
 
 @app.command("sync")

@@ -32,6 +32,7 @@ session/
 labs/
 state/
 logs/
+dates.md
 # Private assignment sample; never publish it with source or releases.
 /prompt_injected_task.pdf
 

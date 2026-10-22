@@ -222,6 +222,7 @@ class SyncService:
                     task_url=task_url,
                     task_site_id=task.task_site_id,
                     due_date=task.due_date,
+                    user_due_date=previous.user_due_date if previous else None,
                     description=detail.description,
                     teacher=teacher,
                     additional_material_url=detail.additional_material_url,

@@ -60,12 +60,16 @@ Override for one command: `lab-auto --root /path/to/workspace sync` or env `LAB_
 | File | Use |
 |------|-----|
 | `state/works.yaml` | Canonical task records (`work_id`, statuses, paths) |
+| `dates.md` | Private generated user/website deadlines; never commit or publish |
 | `state/teachers.yaml` | Subject → effective teacher and `report_label`; `portal_teacher` preserves original portal data |
 | `state/group.yaml` | User-selected timetable group; never guess it |
 | `state/summary.md` | Human-readable overview by subject |
 | `state/needs_review.md` | Tasks in `[REVIEW]` |
 | `labs/<subject>/...` | Per-task folders (reports, `task.pdf`) |
 | `logs/[AI] YYYY-MM-DD.md` | Append short action notes |
+
+**Deadlines:** `sync` parses Предельная дата and generates workspace-root `dates.md`; `lab-auto dates` regenerates offline. `user` follows `website` by default; edit user cells or use `dates set <id> <date|UNSPECIFIED>`. `dates reset <id>` follows the website again. Explicit user overrides survive sync and take priority in deadline views. Dated rows are ascending; UNSPECIFIED is last, sorted by subject/name/ID. Preserve IDs/baseline comments. Both dates.md and canonical works.yaml contain sensitive user data: never commit/package real copies.
+
 
 **Skip** `archived: true` rows unless the user asks about archived work.
 

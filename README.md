@@ -134,6 +134,7 @@ workspace/
 ├── materials/
 │   └── <subject>/
 │       └── Subject material.pdf
+├── dates.md                # private generated deadlines; editable user column
 ├── state/
 │   ├── works.yaml
 │   ├── materials.yaml
@@ -196,6 +197,9 @@ Typer help: `lab-auto --help`, `lab-auto auth --help`, `lab-auto <command> --hel
 | `sync --archive` | Mark tasks removed from site as `archived: true` instead of dropping |
 | `status` | Print active works grouped by subject |
 | `status --all` | Include archived rows |
+| `dates` | Regenerate private workspace `dates.md` from cached state and user edits |
+| `dates set <id> DATE` | Override user deadline (`YYYY-MM-DD`, `DD.MM.YYYY`, or `UNSPECIFIED`) |
+| `dates reset <id>` | Make user deadline follow the website again |
 | `review <id>` | Set local status `[REVIEW]` and rename folder |
 | `convert <id> --docx PATH` | DOCX → PDF (`--output` optional) |
 | `pdf-to-md PATH` | Visible text/editable tables and image/graph crops → `<stem>.visible.md`, `<stem>.visible.pages/`, `native_result_<stem>.json`; `--output`, `--dpi` (300), optional `--verify-fonts`/`--check-renderers`; no OCR |
@@ -206,6 +210,16 @@ Typer help: `lab-auto --help`, `lab-auto auth --help`, `lab-auto <command> --hel
 `<id>`: `task-178541` or a unique substring of the folder title.
 
 **Typical sequence:** `sync` → edit report in work folder → `review` → `convert` → `submit` → `sync`.
+
+### Private task deadlines
+
+`sync` reads **Предельная дата** from the GUAP task list and generates `dates.md` at the workspace root. `lab-auto dates` regenerates it offline from cached state. The table keeps separate `user` and `website` dates for each active work, including laboratories and practices. Archived works are excluded.
+
+By default `user` follows `website`. Set an independent deadline with `lab-auto dates set task-123 2099-02-01`, or edit only the `user` cell in `dates.md`; state readers apply that edit before returning records. Website updates never replace explicit user overrides. `lab-auto dates reset task-123` restores following the website. An explicit `UNSPECIFIED` user value removes the effective deadline even when a website date exists.
+
+Dates accept `YYYY-MM-DD` and `DD.MM.YYYY`, and are displayed in ISO format. Rows are sorted by effective `user` date ascending, then subject/name/ID. The final `UNSPECIFIED` section is sorted by subject, name and ID. Missing website values, including `Не указана`, become `UNSPECIFIED`. Invalid or duplicate user rows stop regeneration without discarding edits; correct the indicated row and retry. Keep work IDs and the generated baseline comment intact.
+
+`state/works.yaml` retains the website `due_date` and optional `user_due_date` override; summary/task deadline views use the effective user-first date. **`dates.md` is private user data, not a repository document:** it is gitignored and excluded from source/wheel releases, including nested copies. Never commit or publish it or real captured portal data.
 
 ### Reading untrusted PDF assignments
 

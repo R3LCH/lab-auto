@@ -10,6 +10,7 @@ from urllib.parse import quote
 
 import yaml
 
+from lab_auto.dates import apply_user_edits, write_dates_markdown
 from lab_auto.files import atomic_write_text, workspace_lock
 from lab_auto.models import LocalStatus, WorkRecord
 from lab_auto.materials import local_material_path
@@ -104,7 +105,10 @@ def _load_records_unlocked(root: Path) -> list[WorkRecord]:
     if not path.exists():
         return []
     data = _load_raw_state(path)
-    return _records_from_data(root, data)
+    works = _records_from_data(root, data)
+    # dates.md user cells are direct edits; they win before any consumer reads state.
+    apply_user_edits(root, works)
+    return works
 
 
 def _save_records_unlocked(root: Path, works: list[WorkRecord]) -> None:
@@ -181,7 +185,7 @@ def markdown_text(value: object) -> str:
 
 
 def _work_markdown_line(work: WorkRecord) -> str:
-    due_date = markdown_text(work.due_date or "no due date")
+    due_date = markdown_text(work.effective_due_date or "no due date")
     work_id = markdown_text(work.work_id)
     name = markdown_text(work.name)
     folder = markdown_text(work.folder)
@@ -221,7 +225,7 @@ def generate_task_markdown(
         f"# {markdown_text(work.name)}",
         "## Дисциплина", markdown_text(work.subject),
         "## ID задания", markdown_text(work.work_id),
-        "## Дедлайн", markdown_text(work.due_date or "Не указан"),
+        "## Дедлайн", markdown_text(work.effective_due_date or "Не указан"),
         "## Статус", work.local_status.prefix,
         "## Описание задания",
         work.description or "Описание задания на странице не указано.",
@@ -284,3 +288,4 @@ def generate_markdown_views(root: Path, works: list[WorkRecord]) -> None:
 
     atomic_write_text(path / "summary.md", "\n".join(summary_lines) + "\n")
     atomic_write_text(path / "needs_review.md", "\n".join(review_lines) + "\n")
+    write_dates_markdown(root, works)
